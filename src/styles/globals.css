@@ -1,0 +1,325 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* ============================================================
+   AgentHub Design System — token layer
+   明暗双主题 / 语义 token / shadcn & beUI 兼容层
+   ============================================================ */
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* ---------- Light theme (default) ---------- */
+:root {
+  /* surfaces */
+  --ah-bg: #f4f5f8;
+  --ah-bg-subtle: #ecEEf3;
+  --ah-surface: #ffffff;
+  --ah-surface-2: #f0f1f6;
+  --ah-border: #e3e6ed;
+  --ah-border-strong: #ccd2de;
+  /* ink */
+  --ah-text: #171a22;
+  --ah-text-2: #596173;
+  --ah-text-3: #8a91a2;
+  /* brand */
+  --ah-primary: #5b4de6;
+  --ah-primary-hover: #4c3ed6;
+  --ah-primary-fg: #ffffff;
+  --ah-primary-soft: rgba(91, 77, 230, 0.09);
+  --ah-ring: rgba(91, 77, 230, 0.5);
+  /* status */
+  --ah-success: #14935a;
+  --ah-warning: #c96f04;
+  --ah-danger: #d5353f;
+  --ah-info: #2a66d9;
+  /* elevation */
+  --ah-shadow-sm: 0 1px 2px rgba(18, 20, 28, 0.06);
+  --ah-shadow-md: 0 6px 20px -6px rgba(18, 20, 28, 0.12);
+  --ah-shadow-lg: 0 20px 50px -12px rgba(18, 20, 28, 0.22);
+  --ah-glow: 0 0 0 1px rgba(91, 77, 230, 0.16), 0 10px 30px -10px rgba(91, 77, 230, 0.35);
+  /* motion */
+  --ah-dur-1: 140ms;
+  --ah-dur-2: 240ms;
+  --ah-dur-3: 420ms;
+  --ah-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ah-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ---------- Dark theme ---------- */
+[data-theme="dark"] {
+  --ah-bg: #0a0c11;
+  --ah-bg-subtle: #0d1017;
+  --ah-surface: #11141d;
+  --ah-surface-2: #181d2a;
+  --ah-border: #232838;
+  --ah-border-strong: #2f374b;
+  --ah-text: #e7e9f0;
+  --ah-text-2: #9aa1b2;
+  --ah-text-3: #5f6880;
+  --ah-primary: #8a7bf8;
+  --ah-primary-hover: #7a68f0;
+  --ah-primary-fg: #ffffff;
+  --ah-primary-soft: rgba(138, 123, 248, 0.12);
+  --ah-ring: rgba(138, 123, 248, 0.55);
+  --ah-success: #2ebd7e;
+  --ah-warning: #e8930c;
+  --ah-danger: #ef5d66;
+  --ah-info: #5c8ff0;
+  --ah-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --ah-shadow-md: 0 8px 24px -8px rgba(0, 0, 0, 0.55);
+  --ah-shadow-lg: 0 24px 60px -12px rgba(0, 0, 0, 0.65);
+  --ah-glow: 0 0 0 1px rgba(138, 123, 248, 0.25), 0 12px 36px -12px rgba(138, 123, 248, 0.4);
+}
+
+/* ---------- shadcn / beUI compat layer ---------- */
+:root {
+  --background: var(--ah-bg);
+  --foreground: var(--ah-text);
+  --card: var(--ah-surface);
+  --card-foreground: var(--ah-text);
+  --popover: var(--ah-surface);
+  --popover-foreground: var(--ah-text);
+  --primary: var(--ah-primary);
+  --primary-foreground: var(--ah-primary-fg);
+  --secondary: var(--ah-surface-2);
+  --secondary-foreground: var(--ah-text);
+  --muted: var(--ah-surface-2);
+  --muted-foreground: var(--ah-text-2);
+  --accent: var(--ah-surface-2);
+  --accent-foreground: var(--ah-text);
+  --destructive: var(--ah-danger);
+  --destructive-foreground: #ffffff;
+  --border: var(--ah-border);
+  --border-strong: var(--ah-border-strong);
+  --input: var(--ah-border-strong);
+  --ring: var(--ah-ring);
+  --radius: 12px;
+}
+
+/* ---------- Tailwind theme mapping ---------- */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* extended semantic tokens */
+  --color-bg-subtle: var(--ah-bg-subtle);
+  --color-surface: var(--ah-surface);
+  --color-surface-2: var(--ah-surface-2);
+  --color-ink-2: var(--ah-text-2);
+  --color-ink-3: var(--ah-text-3);
+  --color-primary-soft: var(--ah-primary-soft);
+  --color-primary-hover: var(--ah-primary-hover);
+  --color-success: var(--ah-success);
+  --color-warning: var(--ah-warning);
+  --color-info: var(--ah-info);
+
+  --shadow-sm: var(--ah-shadow-sm);
+  --shadow-md: var(--ah-shadow-md);
+  --shadow-lg: var(--ah-shadow-lg);
+  --shadow-glow: var(--ah-glow);
+
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-2xl: 24px;
+
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --font-mono: "Cascadia Code", "JetBrains Mono", Consolas, "SFMono-Regular", Menlo, monospace;
+
+  --ease-out-expo: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --animate-fade-rise: fade-rise var(--ah-dur-2) var(--ah-ease-out) both;
+  --animate-pop-in: pop-in var(--ah-dur-2) var(--ah-ease-spring) both;
+  @keyframes fade-rise {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes pop-in {
+    from { opacity: 0; transform: scale(0.96); }
+    to { opacity: 1; transform: scale(1); }
+  }
+}
+
+/* ============================================================
+   Base
+   ============================================================ */
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+  }
+  html {
+    background: var(--ah-bg);
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    user-select: none;
+    cursor: default;
+    overscroll-behavior: none;
+  }
+  input,
+  textarea,
+  [contenteditable="true"],
+  .selectable {
+    user-select: text;
+  }
+  ::selection {
+    background: var(--ah-primary-soft);
+    color: var(--ah-primary);
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 1px;
+  }
+}
+
+/* ---------- scrollbars ---------- */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--ah-text-3) 38%, transparent);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--ah-text-3) 62%, transparent);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ============================================================
+   Theme switch — radial expand / collapse (View Transitions)
+   明→暗：新主题从点击点圆形扩散
+   暗→明：旧暗色层收拢回点击点（旧层置顶收缩）
+   ============================================================ */
+html[data-vt]::view-transition-old(root),
+html[data-vt]::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+html[data-vt="expand"]::view-transition-new(root) {
+  animation: ah-vt-expand 600ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+html[data-vt="collapse"]::view-transition-old(root) {
+  animation: ah-vt-collapse 600ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  z-index: 10;
+}
+@keyframes ah-vt-expand {
+  from {
+    clip-path: circle(0px at var(--vt-x, 50%) var(--vt-y, 50%));
+  }
+  to {
+    clip-path: circle(var(--vt-r, 150%) at var(--vt-x, 50%) var(--vt-y, 50%));
+  }
+}
+@keyframes ah-vt-collapse {
+  from {
+    clip-path: circle(var(--vt-r, 150%) at var(--vt-x, 50%) var(--vt-y, 50%));
+  }
+  to {
+    clip-path: circle(0px at var(--vt-x, 50%) var(--vt-y, 50%));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-vt]::view-transition-old(root),
+  html[data-vt]::view-transition-new(root) {
+    animation: none !important;
+  }
+}
+
+/* ============================================================
+   Markdown body
+   ============================================================ */
+.md-body {
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: var(--ah-text);
+  word-break: break-word;
+}
+.md-body h1, .md-body h2, .md-body h3, .md-body h4 {
+  font-weight: 650;
+  line-height: 1.35;
+  margin: 1.4em 0 0.55em;
+  color: var(--ah-text);
+}
+.md-body h1 { font-size: 1.45em; padding-bottom: 0.3em; border-bottom: 1px solid var(--ah-border); }
+.md-body h2 { font-size: 1.25em; padding-bottom: 0.25em; border-bottom: 1px solid var(--ah-border); }
+.md-body h3 { font-size: 1.1em; }
+.md-body h4 { font-size: 1em; }
+.md-body p { margin: 0.65em 0; }
+.md-body a { color: var(--ah-primary); text-decoration: none; }
+.md-body a:hover { text-decoration: underline; }
+.md-body code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--ah-surface-2);
+  border: 1px solid var(--ah-border);
+  border-radius: 6px;
+  padding: 0.1em 0.4em;
+}
+.md-body pre {
+  background: var(--ah-bg-subtle);
+  border: 1px solid var(--ah-border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  margin: 0.8em 0;
+}
+.md-body pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 0.86em;
+  line-height: 1.6;
+}
+.md-body ul, .md-body ol { padding-left: 1.4em; margin: 0.6em 0; }
+.md-body ul { list-style: disc; }
+.md-body ol { list-style: decimal; }
+.md-body li { margin: 0.25em 0; }
+.md-body blockquote {
+  border-left: 3px solid var(--ah-primary);
+  background: var(--ah-primary-soft);
+  border-radius: 0 8px 8px 0;
+  padding: 0.5em 1em;
+  margin: 0.8em 0;
+  color: var(--ah-text-2);
+}
+.md-body table { border-collapse: collapse; margin: 0.8em 0; width: 100%; font-size: 0.92em; }
+.md-body th, .md-body td { border: 1px solid var(--ah-border); padding: 6px 10px; text-align: left; }
+.md-body th { background: var(--ah-surface-2); font-weight: 600; }
+.md-body hr { border: none; border-top: 1px solid var(--ah-border); margin: 1.4em 0; }
+.md-body :first-child { margin-top: 0; }
