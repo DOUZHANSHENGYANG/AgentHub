@@ -35,6 +35,8 @@ sha2 = "0.10"
 ureq = { version = "2", features = ["json"] }
 serde_yaml_ng = "0.10.0"
 zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
+# 改写文件时间戳：ZIP 的 DOS 纪元哨兵值（1980-01-01）需要被替换为可信时间
+filetime = "0.2"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

@@ -109,6 +109,18 @@ commands::onboard_skills_batch,
             commands::storage_stats,
         ])
         .setup(|app| {
+            // 清理历史遗留的 DOS 纪元时间戳（ZIP 无日期时的 1980-01-01）。
+            // 放后台线程，不阻塞窗口；幂等 —— 没有哨兵时不产生任何写入。
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    let root = store::data_root(&handle).join("skills");
+                    let n = store::normalize_epoch_times(&root);
+                    if n > 0 {
+                        eprintln!("[agenthub] 已把 {n} 个文件的 DOS 纪元时间戳改写为可信时间");
+                    }
+                });
+            }
             // Fallback: force-show window after 8s in case the frontend never calls show()
             if let Some(win) = app.get_webview_window("main") {
                 std::thread::spawn(move || {

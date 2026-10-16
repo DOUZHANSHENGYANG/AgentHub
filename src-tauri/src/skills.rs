@@ -458,24 +458,6 @@ pub fn meta_for_dir(dir: &Path) -> Result<SkillMeta, String> {
     })
 }
 
-/// 文件系统时间可能是「DOS 纪元」哨兵值。
-///
-/// ZIP 的时间戳以 1980-01-01 为原点：条目没有有效日期时（很常见，很多打包工具
-/// 不填）就落在这一天。Windows 的 CopyFile（`std::fs::copy` 的底层）又会保留
-/// 修改时间，于是它从上游技能目录一路传进中枢，最后显示成「更新于 1980-01-01」。
-///
-/// 这不是真实信息，不能当时间用。留一天余量吸收时区偏移（实测有时显示成 1979-12-31）。
-const DOS_EPOCH_SECS: u64 = 315_619_200; // 1980-01-02T00:00:00Z（1980-01-01 为 315_532_800）
-
-fn valid_time(t: std::time::SystemTime) -> Option<std::time::SystemTime> {
-    let secs = t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
-    if secs < DOS_EPOCH_SECS {
-        None
-    } else {
-        Some(t)
-    }
-}
-
 fn fmt_time(t: std::time::SystemTime) -> String {
     let dt: chrono::DateTime<chrono::Local> = t.into();
     dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
@@ -490,8 +472,8 @@ fn skill_times(dir: &Path) -> (String, String) {
     let read = |name: &str| -> (Option<std::time::SystemTime>, Option<std::time::SystemTime>) {
         match std::fs::metadata(dir.join(name)) {
             Ok(m) => (
-                m.created().ok().and_then(valid_time),
-                m.modified().ok().and_then(valid_time),
+                m.created().ok().and_then(crate::store::valid_time),
+                m.modified().ok().and_then(crate::store::valid_time),
             ),
             Err(_) => (None, None),
         }
@@ -2138,6 +2120,7 @@ mod file_access_tests {
 #[cfg(test)]
 mod time_tests {
     use super::*;
+    use crate::store::valid_time;
     use std::time::{Duration, UNIX_EPOCH};
 
     #[test]
