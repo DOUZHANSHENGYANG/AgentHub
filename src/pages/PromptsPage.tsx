@@ -1,9 +1,10 @@
-import { Copy, FileText, History, LayoutGrid, Plus, Rows3, Search, Tag, Trash2 } from "lucide-react";
+import { Copy, FileText, History, LayoutGrid, Plus, Rows3, Search, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EmptyState } from "@/components/EmptyState";
+import { matchTags, TagFilter, type TagMode } from "@/components/TagFilter";
 import { PageShell } from "@/components/PageShell";
 import { TagInput } from "@/components/TagInput";
 import { Markdown } from "@/components/Markdown";
@@ -40,7 +41,8 @@ export function PromptsPage() {
   const deletePrompt = useData((s) => s.deletePrompt);
 
   const [query, setQuery] = useState("");
-  const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [activeTags, setActiveTags] = useState<Set<string>>(new Set());
+  const [tagMode, setTagMode] = useState<TagMode>("or");
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<Prompt | null>(null);
   const [deleting, setDeleting] = useState<Prompt | null>(null);
@@ -60,25 +62,16 @@ export function PromptsPage() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return prompts.filter((p) => {
-      if (activeTag && !p.tags.includes(activeTag)) return false;
+      if (!matchTags(p.tags, activeTags, tagMode)) return false;
       if (!q) return true;
       return (
         p.title.toLowerCase().includes(q) ||
         p.description.toLowerCase().includes(q) ||
         p.content.toLowerCase().includes(q) ||
-        // tag 也参与搜索：输入 tag 名即可命中
         p.tags.some((tg) => tg.toLowerCase().includes(q))
       );
     });
-  }, [prompts, query, activeTag]);
-
-  // tag 过滤条内搜索（tag 过多时可快速定位）
-  const [tagQuery, setTagQuery] = useState("");
-  const visibleTags = useMemo(() => {
-    const q = tagQuery.trim().toLowerCase();
-    if (!q) return allTags;
-    return allTags.filter((tg) => tg.toLowerCase().includes(q));
-  }, [allTags, tagQuery]);
+  }, [prompts, query, activeTags, tagMode]);
 
   const [view, setView] = useState<"grid" | "preview">("grid");
   const [paneMode, setPaneMode] = useState<"preview" | "edit">("preview");
@@ -129,7 +122,6 @@ export function PromptsPage() {
   return (
     <PageShell
       title={t("nav.prompts")}
-      subtitle={t("prompts.subtitle")}
       actions={
         <>
           <div className="flex items-center gap-0.5 rounded-lg border border-border bg-surface p-0.5">
@@ -165,7 +157,7 @@ export function PromptsPage() {
               className="h-9 w-56 pl-8"
             />
           </div>
-          <Button onClick={openNew} variant="glow">
+          <Button onClick={openNew}>
             <Plus />
             {t("prompts.newPrompt")}
           </Button>
@@ -173,42 +165,14 @@ export function PromptsPage() {
       }
     >
       {allTags.length > 0 ? (
-        <div data-anim className="mb-4 flex flex-wrap items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setActiveTag(null)}
-            className={cn(
-              "rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
-              !activeTag ? "border-primary bg-primary text-white" : "border-border text-ink-2 hover:border-primary/40",
-            )}
-          >
-            {t("common.all")}
-          </button>
-          <div className="relative mr-1">
-            <Tag className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-ink-3" />
-            <input
-              value={tagQuery}
-              onChange={(e) => setTagQuery(e.target.value)}
-              placeholder={t("prompts.tagSearch")}
-              className="h-7 w-32 rounded-full border border-border bg-surface pl-7 pr-2 text-[11px] text-foreground outline-none transition-[border-color,box-shadow] placeholder:text-ink-3 focus:border-primary focus:shadow-[0_0_0_3px_var(--ah-primary-soft)]"
-            />
-          </div>
-          {visibleTags.map((tg) => (
-            <button
-              key={tg}
-              type="button"
-              onClick={() => setActiveTag(activeTag === tg ? null : tg)}
-              className={cn(
-                "rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
-                activeTag === tg
-                  ? "border-primary bg-primary text-white"
-                  : "border-border text-ink-2 hover:border-primary/40 hover:text-primary",
-              )}
-            >
-              {tg}
-            </button>
-          ))}
-        </div>
+        <TagFilter
+          allTags={allTags}
+          selected={activeTags}
+          onChange={setActiveTags}
+          mode={tagMode}
+          onModeChange={setTagMode}
+          searchable
+        />
       ) : null}
 
       {filtered.length === 0 ? (

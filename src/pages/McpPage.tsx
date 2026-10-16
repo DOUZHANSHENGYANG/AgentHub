@@ -1,8 +1,11 @@
-import { Braces, Copy, FileInput, Plus, ScanSearch, Search, Server, Trash2, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Check, Copy, FolderOpen, ListChecks, Plus, ScanSearch, Search, Server, Trash2, Wrench } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { matchTags, TagFilter, type TagMode } from "@/components/TagFilter";
+import { HarnessConfigDialog } from "@/components/HarnessConfigDialog";
+import { KeyValueEditor, recordFromRows, rowsFromRecord, type KvRow } from "@/components/KeyValueEditor";
 import { EmptyState } from "@/components/EmptyState";
 import { HarnessDialog } from "@/components/HarnessDialog";
 import { PageShell } from "@/components/PageShell";
@@ -13,18 +16,21 @@ import {
   Dialog,
   DialogBody,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Field, Input, Textarea } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/motion/switch";
 import { api, copyText } from "@/lib/api";
-import type { McpServer } from "@/lib/types";
+import { sortByOrder } from "@/lib/harnessOrder";
+import type { HarnessReport, McpServer } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useData } from "@/stores/data";
+import { useSettings } from "@/stores/settings";
+
+/** 稳定的空数组引用：给 zustand selector 做兜底 */
+const EMPTY_ORDER: string[] = [];
 
 function newServer(): McpServer {
   return {
@@ -39,6 +45,8 @@ function newServer(): McpServer {
     headers: {},
     tags: [],
     enabled: true,
+    targets: [],
+    targetsInitialized: true,
     origin: null,
     versions: [],
     createdAt: "",
@@ -46,29 +54,12 @@ function newServer(): McpServer {
   };
 }
 
-function kvToText(kv: Record<string, string>, sep: string): string {
-  return Object.entries(kv)
-    .map(([k, v]) => `${k}${sep}${v}`)
-    .join("\n");
-}
-function textToKv(text: string, sep: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  text
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .forEach((line) => {
-      const i = line.indexOf(sep);
-      if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + sep.length).trim();
-    });
-  return out;
-}
-
 export function McpPage() {
   const { t } = useTranslation();
   const mcp = useData((s) => s.mcp);
   const saveMcp = useData((s) => s.saveMcp);
   const deleteMcp = useData((s) => s.deleteMcp);
+  const loadMcp = useData((s) => s.loadMcp);
 
   const [query, setQuery] = useState("");
   const [transportFilter, setTransportFilter] = useState("all");
@@ -76,11 +67,21 @@ export function McpPage() {
   const [editing, setEditing] = useState<McpServer | null>(null);
   const [deleting, setDeleting] = useState<McpServer | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
-  const [jsonOpen, setJsonOpen] = useState(false);
-  const [jsonText, setJsonText] = useState("");
-  const [importJsonOpen, setImportJsonOpen] = useState(false);
+
   const [importJsonText, setImportJsonText] = useState("");
   const [importJsonName, setImportJsonName] = useState("");
+  const [newMode, setNewMode] = useState<"manual" | "json">("manual");
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchSel, setBatchSel] = useState<Set<string>>(new Set());
+  const [reports, setReports] = useState<HarnessReport[] | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [cfgOpen, setCfgOpen] = useState(false);
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+  const [activeTags, setActiveTags] = useState<Set<string>>(new Set());
+  const [tagMode, setTagMode] = useState<TagMode>("or");
+  // 同 HarnessDialog：兜底数组必须是稳定引用，否则 selector 每次返回新数组
+  // → zustand 的 Object.is 比较永远不等 → info 未加载时无限重渲染
+  const harnessOrder = useSettings((s) => s.info?.settings.harnessOrder ?? EMPTY_ORDER);
 
   // editor draft
   const [name, setName] = useState("");
@@ -88,22 +89,43 @@ export function McpPage() {
   const [transport, setTransport] = useState("stdio");
   const [command, setCommand] = useState("");
   const [argsText, setArgsText] = useState("");
-  const [envText, setEnvText] = useState("");
+  const [envRows, setEnvRows] = useState<KvRow[]>([]);
   const [url, setUrl] = useState("");
-  const [headersText, setHeadersText] = useState("");
+  const [headerRows, setHeaderRows] = useState<KvRow[]>([]);
   const [tags, setTags] = useState<string[]>([]);
-  const [enabled, setEnabled] = useState(true);
+
+  const allTags = useMemo(() => {
+    const set = new Set<string>();
+    mcp.forEach((s) => s.tags.forEach((tg) => set.add(tg)));
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [mcp]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return mcp.filter((s) => {
+    const list = mcp.filter((s) => {
       if (transportFilter !== "all" && s.transport !== transportFilter) return false;
+      if (!matchTags(s.tags, activeTags, tagMode)) return false;
       if (!q) return true;
-      return s.name.toLowerCase().includes(q) || s.command.toLowerCase().includes(q) || s.description.toLowerCase().includes(q);
+      return (
+        s.name.toLowerCase().includes(q) ||
+        s.command.toLowerCase().includes(q) ||
+        s.description.toLowerCase().includes(q) ||
+        s.tags.some((tg) => tg.toLowerCase().includes(q))
+      );
     });
-  }, [mcp, query, transportFilter]);
+    if (!harnessOrder.length) return list;
+    const rank = (s: McpServer) => {
+      const hid = (s.targets ?? [])[0] ?? s.origin?.harness ?? "";
+      const i = harnessOrder.indexOf(hid);
+      return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+    };
+    return list.map((x, i) => ({ x, i })).sort((a, b) => rank(a.x) - rank(b.x) || a.i - b.i).map(({ x }) => x);
+  }, [mcp, query, transportFilter, harnessOrder, activeTags, tagMode]);
 
   const openNew = () => {
+    setNewMode("manual");
+    setImportJsonText("");
+    setImportJsonName("");
     const s = newServer();
     setEditing(s);
     setName("");
@@ -111,11 +133,10 @@ export function McpPage() {
     setTransport("stdio");
     setCommand("");
     setArgsText("");
-    setEnvText("");
+    setEnvRows([]);
     setUrl("");
-    setHeadersText("");
+    setHeaderRows([]);
     setTags([]);
-    setEnabled(true);
     setEditorOpen(true);
   };
 
@@ -126,11 +147,10 @@ export function McpPage() {
     setTransport(s.transport);
     setCommand(s.command);
     setArgsText(s.args.join("\n"));
-    setEnvText(kvToText(s.env, "="));
+    setEnvRows(rowsFromRecord(s.env));
     setUrl(s.url);
-    setHeadersText(kvToText(s.headers, ": "));
+    setHeaderRows(rowsFromRecord(s.headers));
     setTags(s.tags);
-    setEnabled(s.enabled);
     setEditorOpen(true);
   };
 
@@ -144,28 +164,53 @@ export function McpPage() {
       transport,
       command: transport === "stdio" ? command.trim() : "",
       args: transport === "stdio" ? argsText.split("\n").map((x) => x.trim()).filter(Boolean) : [],
-      env: transport === "stdio" ? textToKv(envText, "=") : {},
+      env: transport === "stdio" ? recordFromRows(envRows) : {},
       url: transport !== "stdio" ? url.trim() : "",
-      headers: transport !== "stdio" ? textToKv(headersText, ": ") : {},
+      headers: transport !== "stdio" ? recordFromRows(headerRows) : {},
       tags,
-      enabled,
     });
     toast.success(t("mcp.saved"));
     setEditorOpen(false);
   };
 
-  const showJson = async () => {
-    try {
-      const cfg = await api.exportMcpConfig([]);
-      setJsonText(JSON.stringify(cfg, null, 2));
-      setJsonOpen(true);
-    } catch (e) {
-      toast.error(String(e));
-    }
+
+
+  const doScan = () => {
+    setScanning(true);
+    api
+      .scanHarnesses()
+      .then(setReports)
+      .catch(() => setReports([]))
+      .finally(() => setScanning(false));
   };
 
-  const toggleEnabled = async (s: McpServer) => {
-    await saveMcp({ ...s, enabled: !s.enabled });
+  const ensureScan = () => {
+    if (reports) return;
+    doScan();
+  };
+
+  /** 按用户自定义顺序排列 harness 列表 */
+  const ordered = (list: HarnessReport[] | null) => sortByOrder(list, harnessOrder);
+
+  useEffect(() => {
+    if (editorOpen) ensureScan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorOpen]);
+
+  const harnessName = (hid: string) => reports?.find((r) => r.id === hid)?.name ?? hid;
+
+  const openMcpFile = async () => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const file = await open({ multiple: false, filters: [{ name: "JSON", extensions: ["json"] }] });
+      if (typeof file !== "string") return;
+      const r = await api.readImportFile(file);
+      setImportJsonText(r.text);
+      if (!importJsonName.trim()) setImportJsonName(r.name.replace(/\.json$/i, ""));
+      toast.success(t("mcp.fileLoaded", { name: r.name }));
+    } catch (e) {
+      toast.error(`${t("mcp.fileReadFail")}: ${String(e)}`);
+    }
   };
 
   const handleImportJson = async () => {
@@ -209,7 +254,6 @@ export function McpPage() {
         ok += 1;
       }
       toast.success(t("mcp.importJsonDone", { count: ok }));
-      setImportJsonOpen(false);
       setImportJsonText("");
       setImportJsonName("");
     } catch (e) {
@@ -217,19 +261,22 @@ export function McpPage() {
     }
   };
 
-  const singleJson = (s: McpServer) =>
-    JSON.stringify(
-      s.transport === "stdio"
-        ? { mcpServers: { [s.name]: { command: s.command, args: s.args, env: s.env } } }
-        : { mcpServers: { [s.name]: { type: s.transport, url: s.url, headers: s.headers } } },
-      null,
-      2,
-    );
+  const singleJson = (s: McpServer) => JSON.stringify(exportServers([s]), null, 2);
+
+  function exportServers(list: McpServer[]) {
+    const map: Record<string, unknown> = {};
+    list.forEach((s) => {
+      map[s.name] =
+        s.transport === "stdio"
+          ? { command: s.command, args: s.args, env: s.env }
+          : { type: s.transport, url: s.url, headers: s.headers };
+    });
+    return { mcpServers: map };
+  }
 
   return (
     <PageShell
       title={t("nav.mcp")}
-      subtitle={t("mcp.subtitle")}
       actions={
         <>
           <div className="relative">
@@ -247,25 +294,94 @@ export function McpPage() {
               <SelectItem value="sse">sse</SelectItem>
             </SelectContent>
           </Select>
-          <Button variant="secondary" onClick={() => void showJson()}>
-            <Braces />
-            {t("mcp.viewJson")}
-          </Button>
-          <Button variant="secondary" onClick={() => setImportJsonOpen(true)}>
-            <FileInput />
-            {t("mcp.importJson")}
+          <Button
+            variant="secondary"
+            onClick={() => {
+              ensureScan();
+              setCfgOpen(true);
+            }}
+          >
+            <Wrench />
+            {t("mcp.harnessCfg")}
           </Button>
           <Button variant="secondary" onClick={() => setScanOpen(true)}>
             <ScanSearch />
             {t("common.scan")}
           </Button>
-          <Button onClick={openNew} variant="glow">
+          <Button onClick={openNew}>
             <Plus />
             {t("mcp.newServer")}
           </Button>
         </>
       }
     >
+      {allTags.length > 0 ? (
+        <TagFilter allTags={allTags} selected={activeTags} onChange={setActiveTags} mode={tagMode} onModeChange={setTagMode} searchable />
+      ) : null}
+
+      {filtered.length > 0 ? (
+        <div data-anim className="mb-3 flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant={batchMode ? "default" : "secondary"}
+            className="h-8"
+            onClick={() => {
+              setBatchMode((v) => !v);
+              setBatchSel(new Set());
+            }}
+          >
+            <ListChecks />
+            {batchMode ? t("mcp.batchExit") : t("mcp.batchEnter")}
+          </Button>
+          {batchMode ? (
+            <>
+              <span className="text-[11px] text-ink-3">{t("mcp.batchHint")}</span>
+              <div className="ml-auto flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-8"
+                  disabled={batchSel.size === 0}
+                  onClick={() => {
+                    const list = filtered.filter((x) => batchSel.has(x.id));
+                    void copyText(JSON.stringify(exportServers(list), null, 2)).then((ok) =>
+                      ok ? toast.success(t("mcp.batchCopied", { n: batchSel.size })) : toast.error(t("common.copy")),
+                    );
+                  }}
+                >
+                  <Copy />
+                  {t("mcp.batchCopyJson")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-8"
+                  onClick={() =>
+                    setBatchSel((prev) =>
+                      filtered.length > 0 && prev.size === filtered.length
+                        ? new Set()
+                        : new Set(filtered.map((x) => x.id)),
+                    )
+                  }
+                >
+                  {filtered.length > 0 && batchSel.size === filtered.length ? t("mcp.unselectAll") : t("harness.selectAll")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-8 text-danger hover:bg-danger/10 hover:text-danger"
+                  onClick={() => setBatchDeleteOpen(true)}
+                  disabled={batchSel.size === 0}
+                >
+                  <Trash2 className="size-3.5" />
+                  {t("mcp.batchDelete")}
+                </Button>
+              </div>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+
       {filtered.length === 0 ? (
         <EmptyState
           icon={Server}
@@ -284,15 +400,43 @@ export function McpPage() {
             <div
               key={s.id}
               data-anim
+              onClick={() => {
+                if (!batchMode) return;
+                setBatchSel((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(s.id)) next.delete(s.id);
+                  else next.add(s.id);
+                  return next;
+                });
+              }}
               onDoubleClick={() => openEdit(s)}
               className={cn(
                 "group flex flex-col rounded-xl border border-border bg-card p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md",
                 !s.enabled && "opacity-60",
+                batchMode && "cursor-pointer",
+                batchMode && batchSel.has(s.id) && "border-primary shadow-[0_0_0_3px_var(--ah-primary-soft)]",
               )}
             >
               <div className="flex items-start justify-between gap-2">
                 <h3 className="min-w-0 flex-1 truncate font-mono text-sm font-semibold text-foreground">{s.name}</h3>
-                <Switch checked={s.enabled} onCheckedChange={() => void toggleEnabled(s)} />
+                {batchMode ? (
+                  <span
+                    className={cn(
+                      "grid size-5 shrink-0 place-items-center rounded border",
+                      batchSel.has(s.id) ? "border-primary bg-primary text-white" : "border-border-strong",
+                    )}
+                  >
+                    {batchSel.has(s.id) ? <Check className="size-3.5" strokeWidth={3} /> : null}
+                  </span>
+                ) : (s.targets ?? []).length ? (
+                  <span className="shrink-0 rounded-full bg-primary-soft px-2 py-0.5 text-[11px] font-medium text-primary">
+                    {t("mcp.applyCount", { n: (s.targets ?? []).length })}
+                  </span>
+                ) : (
+                  <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-medium text-ink-3">
+                    {t("mcp.poolOnly")}
+                  </span>
+                )}
               </div>
               {s.description ? <p className="mt-1 line-clamp-1 text-xs text-ink-2">{s.description}</p> : null}
               <div className="mt-2 truncate rounded-md bg-bg-subtle px-2 py-1.5 font-mono text-[11px] text-ink-2" dir="ltr">
@@ -310,6 +454,11 @@ export function McpPage() {
                     {t("mcp.origin")}: {s.origin.harness}
                   </Badge>
                 ) : null}
+                {(s.targets ?? []).map((hid) => (
+                  <Badge key={hid} variant="info">
+                    {harnessName(hid)}
+                  </Badge>
+                ))}
               </div>
               <div className="mt-auto flex items-center justify-end gap-0.5 pt-3">
                 <Button
@@ -332,11 +481,35 @@ export function McpPage() {
         </div>
       )}
 
-      {/* editor */}
+      {/* editor / new（统一入口：Tab 切换 手动填写 / 导入 JSON） */}
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
         <DialogContent wide>
           <DialogHeader>
             <DialogTitle>{editing?.id ? t("mcp.editTitle") : t("mcp.newTitle")}</DialogTitle>
+            {!editing?.id ? (
+              <div className="mt-2 flex items-center gap-0.5 rounded-lg border border-border bg-surface p-0.5 w-fit">
+                <button
+                  type="button"
+                  onClick={() => setNewMode("manual")}
+                  className={cn(
+                    "rounded-md px-3 py-1 text-[11px] font-medium outline-none transition-colors",
+                    newMode === "manual" ? "bg-primary-soft text-primary" : "text-ink-3 hover:text-foreground",
+                  )}
+                >
+                  {t("mcp.tabManual")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewMode("json")}
+                  className={cn(
+                    "rounded-md px-3 py-1 text-[11px] font-medium outline-none transition-colors",
+                    newMode === "json" ? "bg-primary-soft text-primary" : "text-ink-3 hover:text-foreground",
+                  )}
+                >
+                  {t("mcp.tabJson")}
+                </button>
+              </div>
+            ) : null}
           </DialogHeader>
           <form
             onSubmit={(e) => {
@@ -346,128 +519,142 @@ export function McpPage() {
             className="flex min-h-0 flex-1 flex-col"
           >
             <DialogBody className="flex flex-col gap-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label={t("common.name")}>
-                  <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("mcp.namePlaceholder")} autoFocus className="font-mono" />
-                </Field>
-                <Field label={t("mcp.transport")}>
-                  <Select value={transport} onValueChange={setTransport}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="stdio">{t("mcp.transportStdio")}</SelectItem>
-                      <SelectItem value="http">{t("mcp.transportHttp")}</SelectItem>
-                      <SelectItem value="sse">{t("mcp.transportSse")}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </Field>
-              </div>
-              <Field label={t("common.description")}>
-                <Input value={description} onChange={(e) => setDescription(e.target.value)} />
-              </Field>
-
-              {transport === "stdio" ? (
+              {newMode === "json" && !editing?.id ? (
                 <>
-                  <Field label={t("mcp.command")}>
-                    <Input value={command} onChange={(e) => setCommand(e.target.value)} placeholder={t("mcp.commandPlaceholder")} className="font-mono" />
+                  <p className="rounded-lg bg-bg-subtle px-3 py-2.5 text-xs leading-relaxed text-ink-2">
+                    {t("mcp.jsonExplain")}
+                  </p>
+                  <Field label={t("mcp.importJsonName")}>
+                    <Input value={importJsonName} onChange={(e) => setImportJsonName(e.target.value)} className="font-mono" />
                   </Field>
+                  <div>
+                    <Button type="button" variant="secondary" className="h-8 gap-1.5 text-xs" onClick={() => void openMcpFile()}>
+                      <FolderOpen className="size-3.5" />
+                      {t("mcp.openFile")}
+                    </Button>
+                  </div>
+                  <Field label="JSON" className="flex min-h-0 flex-1 flex-col">
+                    <Textarea
+                      value={importJsonText}
+                      onChange={(e) => setImportJsonText(e.target.value)}
+                      placeholder={'{\n  "mcpServers": {\n    "context7": { "command": "npx", "args": ["-y", "@upstash/context7-mcp"] }\n  }\n}'}
+                      className="min-h-52 flex-1 font-mono text-xs"
+                    />
+                  </Field>
+                </>
+              ) : (
+              <>
+              {/* 基本信息 */}
+              <div className="rounded-xl border border-border bg-bg-subtle/60 p-4">
+                <div className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-ink-3">
+                  {t("mcp.sectionBasic")}
+                </div>
+                <div className="flex flex-col gap-4">
                   <div className="grid gap-4 sm:grid-cols-2">
+                    <Field label={t("common.name")}>
+                      <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("mcp.namePlaceholder")} autoFocus className="font-mono" />
+                    </Field>
+                    <Field label={t("mcp.transport")}>
+                      <Select value={transport} onValueChange={setTransport}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="stdio">{t("mcp.transportStdio")}</SelectItem>
+                          <SelectItem value="http">{t("mcp.transportHttp")}</SelectItem>
+                          <SelectItem value="sse">{t("mcp.transportSse")}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                  </div>
+                  <Field label={t("common.description")}>
+                    <Input value={description} onChange={(e) => setDescription(e.target.value)} />
+                  </Field>
+                  <Field label={t("common.tags")}>
+                    <TagInput value={tags} onChange={setTags} />
+                  </Field>
+                </div>
+              </div>
+
+              {/* 连接配置 */}
+              <div className="rounded-xl border border-border bg-bg-subtle/60 p-4">
+                <div className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-ink-3">
+                  {t("mcp.sectionConn")}
+                </div>
+                {transport === "stdio" ? (
+                  <div className="flex flex-col gap-4">
+                    <Field label={t("mcp.command")}>
+                      <Input value={command} onChange={(e) => setCommand(e.target.value)} placeholder={t("mcp.commandPlaceholder")} className="font-mono" />
+                    </Field>
                     <Field label={t("mcp.args")} hint={t("mcp.argsPlaceholder").replace("&#10;", "\n")}>
                       <Textarea value={argsText} onChange={(e) => setArgsText(e.target.value)} placeholder={"-y\n@upstash/context7-mcp"} className="font-mono text-xs" />
                     </Field>
-                    <Field label={t("mcp.env")}>
-                      <Textarea value={envText} onChange={(e) => setEnvText(e.target.value)} placeholder={"API_KEY=xxx"} className="font-mono text-xs" />
+                    <Field label={t("mcp.env")} hint={t("mcp.envHint")}>
+                      <KeyValueEditor rows={envRows} onChange={setEnvRows} keyPlaceholder={"API_KEY"} valuePlaceholder={"xxx"} />
                     </Field>
                   </div>
-                </>
-              ) : (
-                <>
-                  <Field label={t("mcp.url")}>
-                    <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={t("mcp.urlPlaceholder")} className="font-mono" />
-                  </Field>
-                  <Field label={t("mcp.headers")}>
-                    <Textarea value={headersText} onChange={(e) => setHeadersText(e.target.value)} placeholder={"Authorization: Bearer xxx"} className="font-mono text-xs" />
-                  </Field>
-                </>
-              )}
-
-              <Field label={t("common.tags")}>
-                <TagInput value={tags} onChange={setTags} />
-              </Field>
-
-              <div className="flex items-center gap-3 rounded-lg border border-border bg-bg-subtle px-3 py-2.5">
-                <Switch checked={enabled} onCheckedChange={setEnabled} />
-                <span className="text-xs text-ink-2">{t("mcp.enabledLabel")}</span>
+                ) : (
+                  <div className="flex flex-col gap-4">
+                    <Field label={t("mcp.url")}>
+                      <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={t("mcp.urlPlaceholder")} className="font-mono" />
+                    </Field>
+                    <Field label={t("mcp.headers")} hint={t("mcp.headersHint")}>
+                      <KeyValueEditor rows={headerRows} onChange={setHeaderRows} keyPlaceholder={"Authorization"} valuePlaceholder={"Bearer xxx"} />
+                    </Field>
+                  </div>
+                )}
               </div>
+
+              </>
+              )}
             </DialogBody>
             <DialogFooter>
               <Button variant="secondary" onClick={() => setEditorOpen(false)}>
                 {t("common.cancel")}
               </Button>
-              <Button type="submit" disabled={!name.trim()}>
-                {t("common.save")}
-              </Button>
+              {newMode === "json" && !editing?.id ? (
+                <Button
+                  type="button"
+                  disabled={!importJsonText.trim()}
+                  onClick={() => void handleImportJson().then(() => setEditorOpen(false))}
+                >
+                  {t("mcp.importJsonGo")}
+                </Button>
+              ) : (
+                <Button type="submit" disabled={!name.trim()}>
+                  {t("common.save")}
+                </Button>
+              )}
             </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
 
-      {/* json preview */}
-      <Dialog open={jsonOpen} onOpenChange={setJsonOpen}>
-        <DialogContent wide>
-          <DialogHeader>
-            <DialogTitle>{t("mcp.jsonTitle")}</DialogTitle>
-            <DialogDescription>{t("mcp.jsonHint")}</DialogDescription>
-          </DialogHeader>
-          <DialogBody>
-            <pre className="selectable overflow-x-auto rounded-lg border border-border bg-bg-subtle p-3 font-mono text-xs leading-relaxed text-foreground">
-              {jsonText}
-            </pre>
-          </DialogBody>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => void copyText(jsonText).then((ok) => ok && toast.success(t("common.copied")))}>
-              <Copy />
-              {t("mcp.copyJson")}
-            </Button>
-            <Button onClick={() => setJsonOpen(false)}>
-              <X />
-              {t("common.close")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={batchDeleteOpen}
+        onOpenChange={setBatchDeleteOpen}
+        title={t("mcp.batchDeleteTitle")}
+        message={t("mcp.batchDeleteMsg", { n: batchSel.size })}
+        danger
+        onConfirm={() => {
+          const list = filtered.filter((x) => batchSel.has(x.id));
+          void (async () => {
+            for (const s0 of list) await deleteMcp(s0.id);
+            toast.success(t("mcp.batchDeleted", { n: list.length }));
+            setBatchSel(new Set());
+          })();
+        }}
+      />
 
-      {/* json import */}
-      <Dialog open={importJsonOpen} onOpenChange={setImportJsonOpen}>
-        <DialogContent wide>
-          <DialogHeader>
-            <DialogTitle>{t("mcp.importJsonTitle")}</DialogTitle>
-            <DialogDescription>{t("mcp.importJsonHint")}</DialogDescription>
-          </DialogHeader>
-          <DialogBody className="flex flex-col gap-4">
-            <Field label={t("mcp.importJsonName")}>
-              <Input value={importJsonName} onChange={(e) => setImportJsonName(e.target.value)} className="font-mono" />
-            </Field>
-            <Field label="JSON" className="flex flex-1 flex-col">
-              <Textarea
-                value={importJsonText}
-                onChange={(e) => setImportJsonText(e.target.value)}
-                placeholder={'{\n  "mcpServers": {\n    "context7": { "command": "npx", "args": ["-y", "@upstash/context7-mcp"] }\n  }\n}'}
-                className="min-h-48 flex-1 font-mono text-xs"
-              />
-            </Field>
-          </DialogBody>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setImportJsonOpen(false)}>
-              {t("common.cancel")}
-            </Button>
-            <Button onClick={() => void handleImportJson()} disabled={!importJsonText.trim()}>
-              {t("mcp.importJson")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <HarnessConfigDialog
+        open={cfgOpen}
+        onOpenChange={setCfgOpen}
+        reports={ordered(reports)}
+        scanning={scanning}
+        onRescan={doScan}
+        pool={mcp}
+        onChanged={() => void loadMcp()}
+      />
 
       <HarnessDialog open={scanOpen} onOpenChange={setScanOpen} kind="mcp" />
 

@@ -1,8 +1,7 @@
-import { Check, ChevronDown, Download, FolderInput, Loader2, RefreshCw, ScanSearch, ShieldAlert } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { Check, Download, FolderInput, Loader2, RefreshCw, ScanSearch, Search, ShieldAlert, Tag, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,141 +12,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { HarnessIcon } from "@/components/HarnessIcon";
 import { api } from "@/lib/api";
+import { Input } from "@/components/ui/input";
 import type { HarnessReport, ImportSelection } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useData } from "@/stores/data";
+import { useSettings } from "@/stores/settings";
+import { sortByOrder } from "@/lib/harnessOrder";
 import { Switch } from "@/components/motion/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/motion/tabs";
-
-function CheckItem({
-  checked,
-  onToggle,
-  title,
-  detail,
-}: {
-  checked: boolean;
-  onToggle: () => void;
-  title: string;
-  detail?: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      className={cn(
-        "flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left outline-none transition-colors",
-        checked
-          ? "border-primary/40 bg-primary-soft"
-          : "border-transparent hover:border-border hover:bg-surface-2",
-      )}
-    >
-      <span
-        className={cn(
-          "mt-0.5 grid size-4 shrink-0 place-items-center rounded border transition-colors",
-          checked ? "border-primary bg-primary text-white" : "border-border-strong bg-surface",
-        )}
-      >
-        {checked ? <Check className="size-3" strokeWidth={3} /> : null}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] font-medium text-foreground">{title}</span>
-        {detail ? (
-          <span className="mt-0.5 block truncate font-mono text-[11px] text-ink-3" dir="ltr">
-            {detail}
-          </span>
-        ) : null}
-      </span>
-    </button>
-  );
-}
-
-function HarnessCard({
-  report,
-  kind,
-  selected,
-  onToggle,
-  onSelectAll,
-  children,
-}: {
-  report: HarnessReport;
-  kind: "mcp" | "skills";
-  selected: Set<string>;
-  onToggle: (name: string) => void;
-  onSelectAll: () => void;
-  children?: React.ReactNode;
-}) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(true);
-  const items = kind === "mcp" ? report.mcpServers : report.skills;
-  const count = items.length;
-
-  return (
-    <div className="overflow-hidden rounded-xl border border-border bg-surface">
-      <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left outline-none"
-        >
-          <ChevronDown className={cn("size-4 shrink-0 text-ink-3 transition-transform", open && "rotate-180")} />
-          <span className="truncate text-sm font-semibold text-foreground">{report.name}</span>
-          {count > 0 ? (
-            <Badge variant="default">{kind === "mcp" ? t("harness.mcpCount", { count }) : t("harness.skillsCount", { count })}</Badge>
-          ) : (
-            <Badge variant="muted">{t("harness.notInstalled")}</Badge>
-          )}
-        </button>
-        {count > 0 ? (
-          <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px]" onClick={onSelectAll}>
-            {t("harness.selectAll")}
-          </Button>
-        ) : null}
-        {children}
-      </div>
-      {open ? (
-        <div className="p-2">
-          {count > 0 ? (
-            <div className="grid gap-1 sm:grid-cols-2">
-              {items.map((item) => {
-                const detail =
-                  kind === "mcp"
-                    ? (item as { transport?: string }).transport === "stdio"
-                      ? `${(item as { command?: string }).command ?? ""} ${(item as { args?: string[] }).args?.join(" ") ?? ""}`.trim()
-                      : (item as { url?: string }).url ?? ""
-                    : (item as { description?: string }).description || (item as { path?: string }).path;
-                return (
-                  <CheckItem
-                    key={item.name}
-                    checked={selected.has(item.name)}
-                    onToggle={() => onToggle(item.name)}
-                    title={item.name}
-                    detail={detail}
-                  />
-                );
-              })}
-            </div>
-          ) : (
-            <div className="px-3 py-2 text-xs text-ink-3">
-              {report.configPath ? (
-                <span className="font-mono text-[11px]" dir="ltr">
-                  {report.configPath}
-                </span>
-              ) : (
-                "—"
-              )}
-            </div>
-          )}
-          {report.notes.map((n) => (
-            <div key={n} className="px-3 py-1 text-[11px] text-warning">
-              {n}
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
 /** 冲突确认弹框：同名项目逐项选择保留中枢 / 用扫描源覆盖 */
 function ConflictDialog({
@@ -155,6 +29,7 @@ function ConflictDialog({
   conflicts,
   choice,
   onChoice,
+  onChoiceAll,
   onCancel,
   onConfirm,
   busy,
@@ -163,6 +38,8 @@ function ConflictDialog({
   conflicts: string[];
   choice: Record<string, boolean>;
   onChoice: (name: string, overwrite: boolean) => void;
+  /** 批量设置：一次决定所有冲突项的去向 */
+  onChoiceAll: (overwrite: boolean) => void;
   onCancel: () => void;
   onConfirm: () => void;
   busy: boolean;
@@ -179,6 +56,22 @@ function ConflictDialog({
           <DialogDescription>{t("harness.conflictHint")}</DialogDescription>
         </DialogHeader>
         <DialogBody className="flex flex-col gap-2">
+          {/* 批量操作：冲突项多时逐个点太累（画面里这类同名可以一次定完） */}
+          {conflicts.length > 1 ? (
+            <div className="mb-1 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2">
+              <span className="shrink-0 text-[11px] text-ink-3">
+                {t("harness.conflictAll", { n: conflicts.length })}
+              </span>
+              <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => onChoiceAll(false)}>
+                  {t("harness.allKeepHub")}
+                </Button>
+                <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => onChoiceAll(true)}>
+                  {t("harness.allUseSource")}
+                </Button>
+              </div>
+            </div>
+          ) : null}
           {conflicts.map((name) => (
             <div key={name} className="flex items-center gap-2 rounded-lg border border-border bg-bg-subtle px-3 py-2">
               <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">{name}</span>
@@ -220,6 +113,9 @@ function ConflictDialog({
   );
 }
 
+/** 稳定的空数组引用：给 zustand selector 做兜底，避免每次返回新引用 */
+const EMPTY_ORDER: string[] = [];
+
 export function HarnessDialog({
   open,
   onOpenChange,
@@ -237,6 +133,12 @@ export function HarnessDialog({
   const [tab, setTab] = useState<string>("collect");
   // collect tab: harnessId -> Set(name); apply tab: shared selected names
   const [collectSel, setCollectSel] = useState<Record<string, Set<string>>>({});
+  const [activeHarness, setActiveHarness] = useState<string>("");
+  const [applyQuery, setApplyQuery] = useState("");
+  const [applyTagFilter, setApplyTagFilter] = useState<Set<string>>(new Set());
+  // 收集侧的搜索：只作用于「当前工具」的条目（每个工具的清单互相独立，
+  // 全局搜索没有意义 —— 这里不是一张合并列表）
+  const [collectQuery, setCollectQuery] = useState("");
   const [applySel, setApplySel] = useState<Set<string>>(new Set());
 
   // conflict confirmation state
@@ -251,18 +153,28 @@ export function HarnessDialog({
   const scan = useCallback(async () => {
     setScanning(true);
     try {
-      setReports(await api.scanHarnesses());
+      const rs = await api.scanHarnesses();
+      setReports(rs);
+      if (kind === "mcp") {
+        // 默认全选扫描到的全部 MCP
+        const init: Record<string, Set<string>> = {};
+        rs.forEach((r) => {
+          if (r.mcpServers.length) init[r.id] = new Set(r.mcpServers.map((x) => x.name));
+        });
+        setCollectSel(init);
+      }
     } catch (e) {
       toast.error(String(e));
     } finally {
       setScanning(false);
     }
-  }, []);
+  }, [kind]);
 
   useEffect(() => {
     if (open) {
       setTab("collect");
       setCollectSel({});
+      setCollectQuery("");
       setApplySel(new Set());
       setPending(null);
       void scan();
@@ -280,11 +192,12 @@ export function HarnessDialog({
     });
   };
 
-  const selectAllCollect = (r: HarnessReport) => {
-    const items = kind === "mcp" ? r.mcpServers : r.skills;
+  /** 全选/取消全选。只作用于传入的清单（即过滤后的可见条目），
+   *  这样搜索状态下不会把被筛掉的条目一并选中。 */
+  const selectAllCollect = (r: HarnessReport, items: { name: string }[]) => {
     setCollectSel((prev) => {
       const set = new Set(prev[r.id] ?? []);
-      const allSelected = items.every((x) => set.has(x.name));
+      const allSelected = items.length > 0 && items.every((x) => set.has(x.name));
       if (allSelected) items.forEach((x) => set.delete(x.name));
       else items.forEach((x) => set.add(x.name));
       return { ...prev, [r.id]: set };
@@ -292,6 +205,39 @@ export function HarnessDialog({
   };
 
   const totalCollect = Object.values(collectSel).reduce((acc, s) => acc + s.size, 0);
+
+  /**
+   * 排序：不在中枢的排前面，已在中枢的沉到末尾。
+   * 同名项导入时必然走冲突流程，属于「先看清楚再决定」的一类，
+   * 不该混在待收集项中间。同组内保持原顺序（稳定排序）。
+   */
+  const putExistingLast = (items: { name: string }[], hub: Set<string>) => {
+    const fresh: { name: string }[] = [];
+    const existing: { name: string }[] = [];
+    for (const it of items) (hub.has(it.name) ? existing : fresh).push(it);
+    return [...fresh, ...existing];
+  };
+
+  /** 按关键词过滤某个工具的条目。顺序：名称 → 描述/路径 → 传输方式/命令/URL */
+  const filterCollectItems = (items: { name: string }[]) => {
+    const q = collectQuery.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((it) => {
+      const any = it as Record<string, unknown>;
+      const hay = [
+        it.name,
+        any.description,
+        any.path,
+        any.transport,
+        any.command,
+        any.url,
+      ]
+        .filter((x): x is string => typeof x === "string")
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  };
 
   const runImport = useCallback(
     async (harnessId: string, selections: ImportSelection[]) => {
@@ -358,6 +304,81 @@ export function HarnessDialog({
 
   const hubItems = (kind === "mcp" ? mcp.map((s) => s.name) : skills.map((s) => s.dirName)).filter(Boolean);
 
+  /** 应用列表（带标签元数据，用于按 tag 分组展示） */
+  const applyEntries = useMemo(() => {
+    const q = applyQuery.trim().toLowerCase();
+    const list =
+      kind === "mcp"
+        ? mcp.map((m) => ({ key: m.name, label: m.name, tags: m.tags }))
+        : skills.map((sk) => ({ key: sk.dirName, label: sk.name, tags: sk.tags }));
+    return list.filter((e) => {
+      if (applyTagFilter.size && !e.tags.some((tg) => applyTagFilter.has(tg))) return false;
+      return !q || e.label.toLowerCase().includes(q) || e.tags.some((tg) => tg.toLowerCase().includes(q));
+    });
+  }, [kind, mcp, skills, applyQuery, applyTagFilter]);
+
+  /** 当前上下文（不含标签筛选）下的标签池与计数 */
+  const applyTags = useMemo(() => {
+    const q = applyQuery.trim().toLowerCase();
+    const m: Record<string, number> = {};
+    for (const e of kind === "mcp" ? mcp.map((x) => ({ label: x.name, tags: x.tags })) : skills.map((x) => ({ label: x.name, tags: x.tags }))) {
+      if (q && !e.label.toLowerCase().includes(q) && !e.tags.some((tg) => tg.toLowerCase().includes(q))) continue;
+      for (const tg of e.tags) m[tg] = (m[tg] ?? 0) + 1;
+    }
+    const keys = new Set<string>(Object.keys(m));
+    applyTagFilter.forEach((k) => keys.add(k));
+    return [...keys].sort((a, b) => (m[b] ?? 0) - (m[a] ?? 0) || a.localeCompare(b)).map((k) => [k, m[k] ?? 0] as const);
+  }, [kind, mcp, skills, applyQuery, applyTagFilter]);
+
+  /** 按标签分组（未打标签归入「未分类」） */
+  const applyGroups = useMemo(() => {
+    const map = new Map<string, typeof applyEntries>();
+    for (const e of applyEntries) {
+      const keys = e.tags.length ? e.tags : [t("skills.untagged")];
+      for (const k of keys) {
+        const arr = map.get(k) ?? [];
+        arr.push(e);
+        map.set(k, arr);
+      }
+    }
+    return [...map.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+  }, [applyEntries, t]);
+
+  // 一键收集：所有已勾选 harness 逐个导入；同名冲突默认保留中枢
+  const collectAll = async () => {
+    setBusy(true);
+    let added = 0;
+    let conflicts = 0;
+    let errs = 0;
+    try {
+      for (const r of visible) {
+        const items = kind === "mcp" ? r.mcpServers : r.skills;
+        // 只提交过滤后仍可见的条目：否则搜索状态下点「全部收集」会连
+        // 被筛掉的条目一起收走（用户看不到它们，属于误收集）
+        const allowed = new Set(filterCollectItems(items).map((x) => x.name));
+        const names = [...(collectSel[r.id] ?? [])].filter((n) => allowed.has(n));
+        if (!names.length) continue;
+        try {
+          const pre = await api.preImport(r.id, kind, names);
+          conflicts += pre.conflicts.length;
+          if (pre.newItems.length) {
+            const res = await api.importFromHarness(r.id, kind, pre.newItems.map((n) => ({ name: n, overwrite: false })));
+            added += res.imported.length;
+            errs += res.errors.length;
+          }
+        } catch {
+          errs += 1;
+        }
+      }
+      setCollectSel({});
+      if (kind === "mcp") void loadMcp();
+      else void loadSkills();
+      toast.success(t("harness.collectAllDone", { added, conflicts, errs }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const doApply = async (report: HarnessReport) => {
     const names = [...applySel];
     if (!names.length) {
@@ -378,12 +399,18 @@ export function HarnessDialog({
     }
   };
 
-  const visible = (reports ?? []).filter((r) => (kind === "mcp" ? r.supportsMcp || r.mcpServers.length : r.supportsSkills || r.skills.length));
+  // 必须用模块级常量做兜底：`?? []` 每次求值都是新引用，zustand 用 Object.is
+  // 比较选择结果 → 永远判定"变了" → 无限重渲染（info 尚未加载时必现）
+  const harnessOrder = useSettings((s) => s.info?.settings.harnessOrder ?? EMPTY_ORDER);
+  const visible = sortByOrder(
+    (reports ?? []).filter((r) => (kind === "mcp" ? r.supportsMcp || r.mcpServers.length : r.supportsSkills || r.skills.length)),
+    harnessOrder,
+  ) ?? [];
 
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent wide className="h-[86vh]">
+        <DialogContent wide className="h-[90vh] sm:max-w-6xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ScanSearch className="size-4 text-primary" />
@@ -396,7 +423,7 @@ export function HarnessDialog({
             <Tabs value={tab} onValueChange={setTab} variant="segment">
               <TabsList>
                 <TabsTrigger value="collect">{t("harness.collectTab")}</TabsTrigger>
-                <TabsTrigger value="apply">{t("harness.applyTab")}</TabsTrigger>
+                {kind === "skills" ? <TabsTrigger value="apply">{t("harness.applyTab")}</TabsTrigger> : null}
               </TabsList>
             </Tabs>
           </div>
@@ -409,33 +436,199 @@ export function HarnessDialog({
               </div>
             ) : (
               <Tabs value={tab} onValueChange={setTab}>
-                <TabsContent value="collect">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <p className="text-xs text-ink-3">{t("harness.hintCollect")}</p>
-                    <Button size="sm" variant="ghost" onClick={() => void scan()} disabled={scanning}>
-                      <RefreshCw className={cn("size-3.5", scanning && "animate-spin")} />
-                      {t("common.rescan")}
-                    </Button>
-                  </div>
+                <TabsContent value="collect" className="flex min-h-0 flex-1 flex-col">
                   {visible.length === 0 ? (
                     <div className="py-16 text-center text-xs text-ink-3">{t("harness.noHarness")}</div>
                   ) : (
-                    <div className="flex flex-col gap-3">
-                      {visible.map((r) => (
-                        <HarnessCard
-                          key={r.id}
-                          report={r}
-                          kind={kind}
-                          selected={collectSel[r.id] ?? new Set()}
-                          onToggle={(name) => toggleCollect(r.id, name)}
-                          onSelectAll={() => selectAllCollect(r)}
+                    <div className="flex min-h-0 flex-1 gap-0">
+                      {/* 左：工具列表 */}
+                      <div className="flex w-56 shrink-0 flex-col gap-1 overflow-y-auto border-r border-border pr-3">
+                        <div className="mb-1 flex items-center justify-between">
+                          <span className="text-[11px] font-medium text-ink-3">{t("mcp.pickHarness")}</span>
+                          <button
+                            type="button"
+                            title={t("common.rescan")}
+                            onClick={() => void scan()}
+                            disabled={scanning}
+                            className="rounded p-1 text-ink-3 outline-none transition-colors hover:bg-surface-2 hover:text-foreground"
+                          >
+                            <RefreshCw className={cn("size-3.5", scanning && "animate-spin")} />
+                          </button>
+                        </div>
+                        <Button
+                          size="sm"
+                          className="mb-1 h-8 w-full text-[11px]"
+                          disabled={scanning || busy || totalCollect === 0}
+                          onClick={() => void collectAll()}
                         >
-                          <Button size="sm" variant="ghost" className="h-7 shrink-0 px-2 text-[11px]" disabled={busy} onClick={() => void doCollect(r)}>
-                            <FolderInput className="size-3.5" />
-                            {t("common.collect")}
-                          </Button>
-                        </HarnessCard>
-                      ))}
+                          <FolderInput className="size-3.5" />
+                          {t("harness.collectAll")}
+                        </Button>
+                        {visible.map((r) => {
+                          const items = kind === "mcp" ? r.mcpServers : r.skills;
+                          const shown = filterCollectItems(items);
+                          const selN = (collectSel[r.id] ?? new Set()).size;
+                          return (
+                            <button
+                              key={r.id}
+                              type="button"
+                              onClick={() => setActiveHarness(r.id)}
+                              className={cn(
+                                "flex items-center gap-2 rounded-lg px-3 py-2 text-left outline-none transition-colors",
+                                r.id === activeHarness ? "bg-primary-soft text-primary" : "text-ink-2 hover:bg-surface-2 hover:text-foreground",
+                              )}
+                            >
+                              <HarnessIcon id={r.id} className={cn("size-4 shrink-0", r.id === activeHarness ? "text-primary" : "text-ink-3")} />
+                              <span className="min-w-0 flex-1 truncate text-xs font-medium">{r.name}</span>
+                              {selN ? (
+                                <span className="shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium text-white">{selN}</span>
+                              ) : (
+                                <span className="shrink-0 text-[10px] text-ink-3">
+                                  {collectQuery.trim() ? `${shown.length}/${items.length}` : items.length}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* 右：选中工具的配置项 */}
+                      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pl-4">
+                        {(() => {
+                          const r = visible.find((x) => x.id === activeHarness) ?? visible[0];
+                          const items = kind === "mcp" ? r.mcpServers : r.skills;
+                          const hubSet = new Set(kind === "mcp" ? mcp.map((x) => x.name) : skills.map((x) => x.dirName));
+                          const shown = putExistingLast(filterCollectItems(items), hubSet);
+                          const existingN = shown.filter((x) => hubSet.has(x.name)).length;
+                          const sel = collectSel[r.id] ?? new Set();
+                          // 「全部选择」跟随过滤结果：搜索状态下只全选看得见的条目
+                          const allSel = shown.length > 0 && shown.every((x) => sel.has(x.name));
+                          return (
+                            <>
+                              <div className="mb-3 flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-semibold text-foreground">{r.name}</div>
+                                  <div className="truncate font-mono text-[10px] text-ink-3" dir="ltr">
+                                    {kind === "mcp" ? r.configPath : r.skillsDirs.join(" · ") || "—"}
+                                  </div>
+                                </div>
+                                <div className="flex shrink-0 items-center gap-1.5">
+                                  {existingN > 0 ? (
+                                    <span className="shrink-0 rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning">
+                                      {t("harness.alreadyInHubN", { n: existingN })}
+                                    </span>
+                                  ) : null}
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    className="h-8 text-[11px]"
+                                    disabled={shown.length === 0}
+                                    onClick={() => selectAllCollect(r, shown)}
+                                  >
+                                    {allSel ? t("mcp.unselectAll") : t("common.selectAll")}
+                                  </Button>
+                                  <Button size="sm" disabled={busy || sel.size === 0} onClick={() => void doCollect(r)}>
+                                    <FolderInput className="size-3.5" />
+                                    {t("common.collect")}
+                                  </Button>
+                                </div>
+                              </div>
+
+                              {/* 收集侧筛选：只作用于当前工具的条目 */}
+                              <div className="mb-2.5 flex items-center gap-2">
+                                <div className="relative min-w-40 flex-1">
+                                  <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-ink-3" />
+                                  <Input
+                                    value={collectQuery}
+                                    onChange={(e) => setCollectQuery(e.target.value)}
+                                    placeholder={t("harness.collectSearchPh")}
+                                    className="h-8 pl-8 text-xs"
+                                  />
+                                </div>
+                                {collectQuery.trim() ? (
+                                  <>
+                                    <span className="shrink-0 text-[11px] text-ink-3">
+                                      {t("harness.collectMatch", { n: shown.length, total: items.length })}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => setCollectQuery("")}
+                                      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-ink-3 outline-none transition-colors hover:border-danger/40 hover:text-danger"
+                                    >
+                                      <X className="size-3" />
+                                      {t("skills.clearFilters")}
+                                    </button>
+                                  </>
+                                ) : null}
+                              </div>
+
+                              {items.length === 0 ? (
+                                <div className="rounded-lg border border-dashed border-border px-3 py-8 text-center text-[11px] text-ink-3">
+                                  {t("harness.noItemsInHarness")}
+                                </div>
+                              ) : shown.length === 0 ? (
+                                <div className="rounded-lg border border-dashed border-border px-3 py-8 text-center text-[11px] text-ink-3">
+                                  {t("harness.collectNoMatch", { q: collectQuery.trim() })}
+                                </div>
+                              ) : (
+                                <div className="grid gap-1 sm:grid-cols-2">
+                                  {shown.map((item) => {
+                                    const checked = sel.has(item.name);
+                                    const detail =
+                                      kind === "mcp"
+                                        ? (item as { transport?: string }).transport === "stdio"
+                                          ? `${(item as { command?: string }).command ?? ""} ${(item as { args?: string[] }).args?.join(" ") ?? ""}`.trim()
+                                          : (item as { url?: string }).url ?? ""
+                                        : (item as { description?: string }).description || (item as { path?: string }).path;
+                                    return (
+                                      <button
+                                        key={item.name}
+                                        data-collect-item
+                                        type="button"
+                                        onClick={() => toggleCollect(r.id, item.name)}
+                                        className={cn(
+                                          "flex items-start gap-2.5 rounded-lg border px-3 py-2 text-left outline-none transition-colors",
+                                          checked ? "border-primary/40 bg-primary-soft" : "border-transparent hover:border-border hover:bg-surface-2",
+                                        )}
+                                      >
+                                        <span
+                                          className={cn(
+                                            "mt-0.5 grid size-4 shrink-0 place-items-center rounded border transition-colors",
+                                            checked ? "border-primary bg-primary text-white" : "border-border-strong bg-surface",
+                                          )}
+                                        >
+                                          {checked ? <Check className="size-3" strokeWidth={3} /> : null}
+                                        </span>
+                                        <span className="min-w-0 flex-1">
+                                          <span className="flex min-w-0 items-center gap-1.5">
+                                            <span className="truncate text-[13px] font-medium text-foreground">{item.name}</span>
+                                            {hubSet.has(item.name) ? (
+                                              <span className="shrink-0 rounded border border-warning/40 bg-warning/10 px-1 py-px text-[10px] font-medium text-warning">
+                                                {t("harness.alreadyInHub")}
+                                              </span>
+                                            ) : null}
+                                          </span>
+                                          {detail ? (
+                                            <span className="mt-0.5 block truncate font-mono text-[11px] text-ink-3" dir="ltr">
+                                              {detail}
+                                            </span>
+                                          ) : null}
+                                        </span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
+
+                              {r.notes.map((n) => (
+                                <div key={n} className="mt-2 text-[11px] text-warning">
+                                  {n}
+                                </div>
+                              ))}
+                            </>
+                          );
+                        })()}
+                      </div>
                     </div>
                   )}
                 </TabsContent>
@@ -452,33 +645,147 @@ export function HarnessDialog({
                     <div className="py-16 text-center text-xs text-ink-3">{t("harness.noHubItems")}</div>
                   ) : (
                     <>
-                      <div className="mb-4 flex flex-wrap gap-1.5">
-                        {hubItems.map((name) => {
-                          const checked = applySel.has(name);
-                          return (
+                      {/* 搜索 + 全选 */}
+                      <div className="mb-3 flex flex-wrap items-center gap-2">
+                        <div className="relative min-w-44 flex-1">
+                          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-ink-3" />
+                          <Input
+                            value={applyQuery}
+                            onChange={(e) => setApplyQuery(e.target.value)}
+                            placeholder={t("harness.applySearchPh")}
+                            className="h-8 pl-8 text-xs"
+                          />
+                        </div>
+                        <span className="shrink-0 text-[11px] text-ink-3">
+                          {t("harness.applySelCount", { n: applySel.size, total: hubItems.length })}
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="h-8 text-[11px]"
+                          onClick={() =>
+                            setApplySel((prev) =>
+                              prev.size === applyEntries.length && applyEntries.length > 0
+                                ? new Set()
+                                : new Set(applyEntries.map((e) => e.key)),
+                            )
+                          }
+                        >
+                          {applySel.size === applyEntries.length && applyEntries.length > 0
+                            ? t("mcp.unselectAll")
+                            : t("common.selectAll")}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="h-8 text-[11px]"
+                          disabled={applySel.size === 0}
+                          onClick={() => setApplySel(new Set())}
+                        >
+                          {t("harness.applyClearSel")}
+                        </Button>
+                      </div>
+
+                      {/* 标签快捷筛选 */}
+                      {applyTags.length > 0 ? (
+                        <div className="mb-3 flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-2.5">
+                          <Tag className="size-3.5 shrink-0 text-ink-3" />
+                          {applyTags.map(([tg, n]) => {
+                            const on = applyTagFilter.has(tg);
+                            return (
+                              <button
+                                key={tg}
+                                type="button"
+                                onClick={() =>
+                                  setApplyTagFilter((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(tg)) next.delete(tg);
+                                    else next.add(tg);
+                                    return next;
+                                  })
+                                }
+                                className={cn(
+                                  "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                                  on
+                                    ? "border-primary bg-primary text-white"
+                                    : "border-border bg-surface text-ink-2 hover:border-primary/40 hover:text-primary",
+                                )}
+                              >
+                                {tg}
+                                <span className="tabular-nums opacity-60">{n}</span>
+                              </button>
+                            );
+                          })}
+                          {applyTagFilter.size > 0 ? (
                             <button
-                              key={name}
                               type="button"
-                              onClick={() =>
-                                setApplySel((prev) => {
-                                  const next = new Set(prev);
-                                  if (next.has(name)) next.delete(name);
-                                  else next.add(name);
-                                  return next;
-                                })
-                              }
-                              className={cn(
-                                "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium outline-none transition-colors",
-                                checked
-                                  ? "border-primary bg-primary text-white"
-                                  : "border-border bg-surface text-ink-2 hover:border-primary/40 hover:text-primary",
-                              )}
+                              onClick={() => setApplyTagFilter(new Set())}
+                              className="ml-1 inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-ink-3 outline-none transition-colors hover:border-danger/40 hover:text-danger"
                             >
-                              {checked ? <Check className="size-3" /> : null}
-                              {name}
+                              <X className="size-3" />
+                              {t("skills.clearFilters")}
                             </button>
-                          );
-                        })}
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      {/* 按标签分组的技能选择 */}
+                      <div className="mb-4 flex flex-col gap-3">
+                        {applyGroups.length === 0 ? (
+                          <p className="px-3 py-4 text-center text-[11px] text-ink-3">{t("skills.gitFilterEmpty")}</p>
+                        ) : (
+                          applyGroups.map(([tag, items]) => (
+                            <div key={tag}>
+                              <div className="mb-1.5 flex items-center gap-1.5">
+                                <Tag className="size-3 text-ink-3" />
+                                <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">{tag}</span>
+                                <span className="text-[10px] text-ink-3">· {items.length}</span>
+                                <button
+                                  type="button"
+                                  className="ml-1 text-[10px] text-primary outline-none hover:underline"
+                                  onClick={() =>
+                                    setApplySel((prev) => {
+                                      const n = new Set(prev);
+                                      const allOn = items.every((x) => n.has(x.key));
+                                      items.forEach((x) => (allOn ? n.delete(x.key) : n.add(x.key)));
+                                      return n;
+                                    })
+                                  }
+                                >
+                                  {items.every((x) => applySel.has(x.key)) ? t("mcp.unselectAll") : t("common.selectAll")}
+                                </button>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {items.map((e) => {
+                                  const checked = applySel.has(e.key);
+                                  return (
+                                    <button
+                                      key={e.key}
+                                      type="button"
+                                      onClick={() =>
+                                        setApplySel((prev) => {
+                                          const next = new Set(prev);
+                                          if (next.has(e.key)) next.delete(e.key);
+                                          else next.add(e.key);
+                                          return next;
+                                        })
+                                      }
+                                      className={cn(
+                                        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium outline-none transition-colors",
+                                        checked
+                                          ? "border-primary bg-primary text-white"
+                                          : "border-border bg-surface text-ink-2 hover:border-primary/40 hover:text-primary",
+                                      )}
+                                    >
+                                      {checked ? <Check className="size-3" /> : null}
+                                      {e.label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))
+                        )}
                       </div>
                       <div className="flex flex-col gap-3">
                         {visible.map((r) => (
@@ -521,6 +828,9 @@ export function HarnessDialog({
         conflicts={pending?.conflicts ?? []}
         choice={conflictChoice}
         onChoice={(name, overwrite) => setConflictChoice((prev) => ({ ...prev, [name]: overwrite }))}
+        onChoiceAll={(overwrite) =>
+          setConflictChoice(Object.fromEntries((pending?.conflicts ?? []).map((n) => [n, overwrite])))
+        }
         onCancel={() => setPending(null)}
         onConfirm={() => void confirmConflicts()}
         busy={busy}

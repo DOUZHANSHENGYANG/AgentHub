@@ -4,9 +4,11 @@ import { Toaster } from "sonner";
 import { SettingsView } from "@/components/SettingsView";
 import { Sidebar } from "@/components/Sidebar";
 import { TitleBar } from "@/components/TitleBar";
+import { ToolManagerPage } from "@/pages/ToolManagerPage";
 import { McpPage } from "@/pages/McpPage";
 import { PromptsPage } from "@/pages/PromptsPage";
 import { SkillsPage } from "@/pages/SkillsPage";
+import { api } from "@/lib/api";
 import { useData } from "@/stores/data";
 import { useSettings } from "@/stores/settings";
 import { useUi } from "@/stores/ui";
@@ -32,6 +34,8 @@ export default function App() {
   useEffect(() => {
     if (ready) {
       void loadAll();
+      // 每日自动备份：当天首次启动时触发（幂等）
+      void api.vaultMaybeDaily().catch(() => undefined);
       // first visible frame = fully rendered UI (no white flash)
       requestAnimationFrame(() => void getCurrentWindow().show());
     }
@@ -60,6 +64,7 @@ export default function App() {
           {page === "prompts" ? <PromptsPage /> : null}
           {page === "mcp" ? <McpPage /> : null}
           {page === "skills" ? <SkillsPage /> : null}
+          {page === "vault" ? <ToolManagerPage /> : null}
         </main>
       </div>
       {toaster}

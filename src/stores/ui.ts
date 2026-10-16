@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type Page = "prompts" | "mcp" | "skills" | "settings";
+export type Page = "prompts" | "mcp" | "skills" | "vault" | "settings";
 
 interface UiState {
   page: Page;
@@ -10,7 +10,7 @@ interface UiState {
   goBack: () => void;
 }
 
-const MAIN_PAGES: Page[] = ["prompts", "mcp", "skills"];
+const MAIN_PAGES: Page[] = ["prompts", "mcp", "skills", "vault"];
 
 export const useUi = create<UiState>((set, get) => ({
   page: "skills",
