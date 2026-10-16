@@ -69,8 +69,12 @@ const LIFECYCLE_ZH_KEY: Record<string, string> = {
 };
 
 /** 格式化 ISO 时间为本地可读（失败则原样返回） */
+/**
+ * 时间显示。空值表示「时间不可知」——后端会剔除 DOS 纪元哨兵值
+ * （ZIP 无日期时的时间戳、1980-01-01），此时显示破折号而不是假日期。
+ */
 function fmtTime(iso?: string): string {
-  if (!iso) return "";
+  if (!iso) return "—";
   try {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return iso;

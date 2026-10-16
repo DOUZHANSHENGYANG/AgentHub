@@ -386,7 +386,7 @@ pub fn meta_for_dir(dir: &Path) -> Result<SkillMeta, String> {
             }
         }
     }
-    let (created_at, updated_at) = fs_times(&doc_path);
+    let (created_at, updated_at) = skill_times(dir);
     // SSEP v1.1：读 SKILL.toml（渐进增强；缺失 = 最小态）
     let toml_doc = crate::skill_toml::load(dir);
     let has_toml = toml_doc.is_some();
@@ -458,18 +458,61 @@ pub fn meta_for_dir(dir: &Path) -> Result<SkillMeta, String> {
     })
 }
 
-fn fs_times(path: &Path) -> (String, String) {
-    let fmt = |t: std::io::Result<std::time::SystemTime>| -> String {
-        t.map(|x| {
-            let dt: chrono::DateTime<chrono::Local> = x.into();
-            dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-        })
-        .unwrap_or_default()
-    };
-    match std::fs::metadata(path) {
-        Ok(m) => (fmt(m.created()), fmt(m.modified())),
-        Err(_) => (String::new(), String::new()),
+/// 文件系统时间可能是「DOS 纪元」哨兵值。
+///
+/// ZIP 的时间戳以 1980-01-01 为原点：条目没有有效日期时（很常见，很多打包工具
+/// 不填）就落在这一天。Windows 的 CopyFile（`std::fs::copy` 的底层）又会保留
+/// 修改时间，于是它从上游技能目录一路传进中枢，最后显示成「更新于 1980-01-01」。
+///
+/// 这不是真实信息，不能当时间用。留一天余量吸收时区偏移（实测有时显示成 1979-12-31）。
+const DOS_EPOCH_SECS: u64 = 315_619_200; // 1980-01-02T00:00:00Z（1980-01-01 为 315_532_800）
+
+fn valid_time(t: std::time::SystemTime) -> Option<std::time::SystemTime> {
+    let secs = t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    if secs < DOS_EPOCH_SECS {
+        None
+    } else {
+        Some(t)
     }
+}
+
+fn fmt_time(t: std::time::SystemTime) -> String {
+    let dt: chrono::DateTime<chrono::Local> = t.into();
+    dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// 技能的创建 / 更新时间。
+///
+/// 主来源是 SKILL.md。仅当它的时间不可信（DOS 纪元或缺失）时，才回退到
+/// SKILL.toml 与 .hub.json —— 这两个都是工具自身写的，时间真实。
+/// 这样既修掉 1980，又不改变其它技能的既有语义。
+fn skill_times(dir: &Path) -> (String, String) {
+    let read = |name: &str| -> (Option<std::time::SystemTime>, Option<std::time::SystemTime>) {
+        match std::fs::metadata(dir.join(name)) {
+            Ok(m) => (
+                m.created().ok().and_then(valid_time),
+                m.modified().ok().and_then(valid_time),
+            ),
+            Err(_) => (None, None),
+        }
+    };
+    let (mut created, mut modified) = read("SKILL.md");
+    for name in ["SKILL.toml", ".hub.json"] {
+        if created.is_some() && modified.is_some() {
+            break;
+        }
+        let (c, m) = read(name);
+        if created.is_none() {
+            created = c;
+        }
+        if modified.is_none() {
+            modified = m;
+        }
+    }
+    (
+        created.map(fmt_time).unwrap_or_default(),
+        modified.map(fmt_time).unwrap_or_default(),
+    )
 }
 
 pub fn list_skills(app: &AppH) -> Result<Vec<SkillMeta>, String> {
@@ -2089,6 +2132,54 @@ mod file_access_tests {
         assert_eq!(file_kind("xlsx"), "sheet");
         assert_eq!(file_kind("zip"), "archive");
         assert_eq!(file_kind("weird"), "other");
+    }
+}
+
+#[cfg(test)]
+mod time_tests {
+    use super::*;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    #[test]
+    fn rejects_dos_epoch() {
+        // ZIP 无日期时的哨兵值
+        let epoch_1980 = UNIX_EPOCH + Duration::from_secs(315_532_800);
+        assert!(valid_time(epoch_1980).is_none(), "1980-01-01 应被判为无效");
+        // 实测有时显示成 1979-12-31（时区偏移），也要挡住
+        let epoch_minus = UNIX_EPOCH + Duration::from_secs(315_532_800 - 86_400);
+        assert!(valid_time(epoch_minus).is_none(), "1979-12-31 应被判为无效");
+        // 纪元本身
+        assert!(valid_time(UNIX_EPOCH).is_none(), "1970 应被判为无效");
+    }
+
+    /// 回退链：SKILL.md 时间不可信时，用工具自身写的 .hub.json / SKILL.toml
+    #[test]
+    fn falls_back_to_hub_json() {
+        let dir = std::env::temp_dir().join(format!("ah-time-test-{}", crate::models::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // 只有 .hub.json（模拟 SKILL.md 缺失或时间不可信）
+        std::fs::write(dir.join(".hub.json"), b"{}").unwrap();
+        let (_, updated) = skill_times(&dir);
+        assert!(!updated.is_empty(), "SKILL.md 不可信时应回退到 .hub.json 的时间");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 三个候选都不可用时应返回空，而不是编一个日期
+    #[test]
+    fn empty_when_nothing_usable() {
+        let dir = std::env::temp_dir().join(format!("ah-time-empty-{}", crate::models::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(skill_times(&dir), (String::new(), String::new()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn accepts_real_times() {
+        let t2026 = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        assert!(valid_time(t2026).is_some(), "2027 年的正常时间应被接受");
+        // 边界：1980-01-02 当天之后即视为有效
+        let just_after = UNIX_EPOCH + Duration::from_secs(315_619_200);
+        assert!(valid_time(just_after).is_some());
     }
 }
 
