@@ -12,7 +12,7 @@ export const DialogContent = forwardRef<
   HTMLAttributes<HTMLDivElement> & { wide?: boolean }
 >(({ className, children, wide, ...props }, ref) => (
   <DialogPrimitive.Portal>
-    <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/55 backdrop-blur-[2px] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0" />
+    <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[3px] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0" />
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
@@ -33,17 +33,17 @@ export const DialogContent = forwardRef<
 DialogContent.displayName = "DialogContent";
 
 export function DialogHeader({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("flex flex-col gap-1 border-b border-border px-5 py-4 pr-12", className)} {...props} />;
+  return <div className={cn("flex flex-col gap-1 border-b border-border px-6 py-4 pr-14", className)} {...props} />;
 }
 
 export function DialogBody({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("min-h-0 flex-1 overflow-y-auto px-5 py-4", className)} {...props} />;
+  return <div className={cn("min-h-0 flex-1 overflow-y-auto px-6 py-5", className)} {...props} />;
 }
 
 export function DialogFooter({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn("flex items-center justify-end gap-2 border-t border-border bg-bg-subtle px-5 py-3.5", className)}
+      className={cn("flex items-center justify-end gap-2 border-t border-border px-6 py-4", className)}
       {...props}
     />
   );
@@ -53,7 +53,7 @@ export const DialogTitle = forwardRef<HTMLHeadingElement, HTMLAttributes<HTMLHea
   ({ className, ...props }, ref) => (
     <DialogPrimitive.Title
       ref={ref}
-      className={cn("text-[15px] font-semibold leading-tight text-foreground", className)}
+      className={cn("text-[16px] font-semibold leading-tight tracking-[-0.01em] text-foreground", className)}
       {...props}
     />
   ),
@@ -62,7 +62,7 @@ DialogTitle.displayName = "DialogTitle";
 
 export const DialogDescription = forwardRef<HTMLParagraphElement, HTMLAttributes<HTMLParagraphElement>>(
   ({ className, ...props }, ref) => (
-    <DialogPrimitive.Description ref={ref} className={cn("text-xs text-ink-2", className)} {...props} />
+    <DialogPrimitive.Description ref={ref} className={cn("text-[12px] leading-relaxed text-ink-3", className)} {...props} />
   ),
 );
 DialogDescription.displayName = "DialogDescription";

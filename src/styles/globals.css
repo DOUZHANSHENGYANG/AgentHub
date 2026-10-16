@@ -8,36 +8,47 @@
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
-/* ---------- Light theme (default) ---------- */
+/* ============================================================
+   Palette —— 双轴模型
+   · data-theme  = 明暗模式（light / dark）      —— 决定中性色、阴影、材质
+   · data-accent = 主题色调（blue/teal/rose/graphite）—— 只决定强调色
+   两轴正交：任何色调都能配任何模式，共 4×2 = 8 组。
+   这样 Tailwind 的 dark: 变体与 color-scheme 仍只需认 data-theme。
+   ============================================================ */
+
+/* ---------- 默认：蓝色 + 浅色模式 ---------- */
 :root {
-  /* surfaces */
-  --ah-bg: #f4f5f8;
-  --ah-bg-subtle: #ecEEf3;
-  --ah-surface: #ffffff;
-  --ah-surface-2: #f0f1f6;
-  --ah-border: #e3e6ed;
-  --ah-border-strong: #ccd2de;
-  /* ink */
-  --ah-text: #171a22;
-  --ah-text-2: #596173;
-  --ah-text-3: #8a91a2;
-  /* brand */
-  --ah-primary: #5b4de6;
-  --ah-primary-hover: #4c3ed6;
+  /* surfaces —— 中性灰阶：靠层次分工，不靠色偏 */
+  --ah-bg: #f5f5f7;          /* 窗口底 */
+  --ah-bg-subtle: #ececee;   /* 内嵌槽位（代码块 / 输入底色） */
+  --ah-surface: #ffffff;     /* 卡片 / 面板 */
+  --ah-surface-2: #f0f0f2;   /* 悬停填充 */
+  --ah-border: rgba(0, 0, 0, 0.08);   /* 发丝级半透明，随底色自适应 */
+  --ah-border-strong: rgba(0, 0, 0, 0.16);
+  /* ink —— Apple 近黑 + 系统灰 */
+  --ah-text: #1d1d1f;
+  --ah-text-2: #5b5b62;       /* 对页面底 6.19:1 */
+  --ah-text-3: #6f6f76;       /* 对页面底 4.58:1 */
+  /* accent —— 默认蓝：Apple 官网按钮蓝，白字在其上 4.70:1（AA） */
+  --ah-primary: #0071e3;
+  --ah-primary-hover: #0062c4;
   --ah-primary-fg: #ffffff;
-  --ah-primary-soft: rgba(91, 77, 230, 0.09);
-  --ah-ring: rgba(91, 77, 230, 0.5);
-  /* status */
-  --ah-success: #14935a;
-  --ah-warning: #c96f04;
-  --ah-danger: #d5353f;
-  --ah-info: #2a66d9;
-  /* elevation */
-  --ah-shadow-sm: 0 1px 2px rgba(18, 20, 28, 0.06);
-  --ah-shadow-md: 0 6px 20px -6px rgba(18, 20, 28, 0.12);
-  --ah-shadow-lg: 0 20px 50px -12px rgba(18, 20, 28, 0.22);
-  --ah-glow: 0 0 0 1px rgba(91, 77, 230, 0.16), 0 10px 30px -10px rgba(91, 77, 230, 0.35);
-  /* motion */
+  --ah-primary-soft: rgba(0, 113, 227, 0.10);
+  --ah-ring: rgba(0, 113, 227, 0.45);
+  /* status —— 压饱和度取达标深色值。
+     注意：status 刻意不随 accent 变 —— 语义色一变，"成功/警告"就不再是固定含义 */
+  --ah-success: #1c7531;
+  --ah-warning: #a35a00;
+  --ah-danger: #d70015;
+  --ah-info: #0060df;
+  /* elevation —— 多层小阴影（Apple 做法），不用单层大模糊 */
+  --ah-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06), 0 1px 1px rgba(0, 0, 0, 0.04);
+  --ah-shadow-md: 0 4px 6px rgba(0, 0, 0, 0.06), 0 2px 4px rgba(0, 0, 0, 0.05);
+  --ah-shadow-lg: 0 10px 20px rgba(0, 0, 0, 0.09), 0 6px 6px rgba(0, 0, 0, 0.05);
+  /* material —— 毛玻璃导航层 */
+  --ah-material: rgba(255, 255, 255, 0.72);
+  --ah-material-strong: rgba(255, 255, 255, 0.85);
+  /* motion —— 与色调无关，只定义一次 */
   --ah-dur-1: 140ms;
   --ah-dur-2: 240ms;
   --ah-dur-3: 420ms;
@@ -45,30 +56,91 @@
   --ah-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-/* ---------- Dark theme ---------- */
+/* ---------- 深色模式：只覆写「模式相关」的部分 ----------
+   accent 不在这里定义 —— 交给下面的 data-accent 组，
+   否则一加主题就会被深色块里的蓝覆盖掉。 */
 [data-theme="dark"] {
-  --ah-bg: #0a0c11;
-  --ah-bg-subtle: #0d1017;
-  --ah-surface: #11141d;
-  --ah-surface-2: #181d2a;
-  --ah-border: #232838;
-  --ah-border-strong: #2f374b;
-  --ah-text: #e7e9f0;
-  --ah-text-2: #9aa1b2;
-  --ah-text-3: #5f6880;
-  --ah-primary: #8a7bf8;
-  --ah-primary-hover: #7a68f0;
-  --ah-primary-fg: #ffffff;
-  --ah-primary-soft: rgba(138, 123, 248, 0.12);
-  --ah-ring: rgba(138, 123, 248, 0.55);
-  --ah-success: #2ebd7e;
-  --ah-warning: #e8930c;
-  --ah-danger: #ef5d66;
-  --ah-info: #5c8ff0;
-  --ah-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
-  --ah-shadow-md: 0 8px 24px -8px rgba(0, 0, 0, 0.55);
-  --ah-shadow-lg: 0 24px 60px -12px rgba(0, 0, 0, 0.65);
-  --ah-glow: 0 0 0 1px rgba(138, 123, 248, 0.25), 0 12px 36px -12px rgba(138, 123, 248, 0.4);
+  color-scheme: dark;
+  --ah-bg: #1c1c1e;
+  --ah-bg-subtle: #161618;
+  --ah-surface: #2c2c2e;
+  --ah-surface-2: #3a3a3c;
+  --ah-border: rgba(255, 255, 255, 0.10);
+  --ah-border-strong: rgba(255, 255, 255, 0.20);
+  --ah-text: #f5f5f7;
+  --ah-text-2: #b2b2b8;       /* 对页面底 8.06:1 */
+  --ah-text-3: #949499;       /* 对页面底 5.64:1 */
+  --ah-success: #30d158;
+  --ah-warning: #ff9f0a;
+  --ah-danger: #ff453a;
+  --ah-info: #409cff;
+  --ah-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --ah-shadow-md: 0 4px 8px rgba(0, 0, 0, 0.45), 0 2px 4px rgba(0, 0, 0, 0.35);
+  --ah-shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.55), 0 6px 10px rgba(0, 0, 0, 0.35);
+  --ah-material: rgba(28, 28, 30, 0.72);
+  --ah-material-strong: rgba(28, 28, 30, 0.85);
+  /* 深色模式的填充按钮用深色字：白字压亮色只有 3.6:1 左右 */
+  --ah-primary-fg: #0a0a0a;
+}
+
+/* ---------- 主题色调 ----------
+   每个色调给「浅色 + 深色」两组值。
+   深色模式在浅色底上会刺眼、浅色模式在深色底上会发灰，必须分别取。 */
+
+/* 蓝（:root 已是默认值，这里只补深色） */
+[data-theme="dark"][data-accent="blue"] {
+  --ah-primary: #0a84ff;
+  --ah-primary-hover: #3a9bff;
+  --ah-primary-soft: rgba(10, 132, 255, 0.16);
+  --ah-ring: rgba(10, 132, 255, 0.50);
+}
+
+/* 青 —— 与 success 距离 74，可区分 */
+[data-accent="teal"] {
+  --ah-primary: #0b6e79;      /* 白字 5.96:1 */
+  --ah-primary-hover: #095a63;
+  --ah-primary-soft: rgba(11, 110, 121, 0.10);
+  --ah-ring: rgba(11, 110, 121, 0.45);
+}
+[data-theme="dark"][data-accent="teal"] {
+  /* 深色模式填充按钮用深色字（白字压亮色只有 2~3:1） */
+  --ah-primary-fg: #0a0a0a;
+  --ah-primary: #3fc5d4;      /* 近黑字 9.57:1 */
+  --ah-primary-hover: #63d3df;
+  --ah-primary-soft: rgba(63, 197, 212, 0.16);
+  --ah-ring: rgba(63, 197, 212, 0.50);
+}
+
+/* 玫瑰 —— 与 danger 距离 110（danger 是正红，此为品红，可区分） */
+[data-accent="rose"] {
+  --ah-primary: #a8336b;      /* 白字 6.27:1 */
+  --ah-primary-hover: #8f2b5b;
+  --ah-primary-soft: rgba(168, 51, 107, 0.10);
+  --ah-ring: rgba(168, 51, 107, 0.45);
+}
+[data-theme="dark"][data-accent="rose"] {
+  /* 深色模式填充按钮用深色字（白字压亮色只有 2~3:1） */
+  --ah-primary-fg: #0a0a0a;
+  --ah-primary: #ff6b9d;      /* 近黑字 7.39:1 */
+  --ah-primary-hover: #ff8bb3;
+  --ah-primary-soft: rgba(255, 107, 157, 0.16);
+  --ah-ring: rgba(255, 107, 157, 0.50);
+}
+
+/* 石墨 —— 无彩色强调：把彩色留给状态，界面最安静 */
+[data-accent="graphite"] {
+  --ah-primary: #48484a;      /* 白字 9.12:1 */
+  --ah-primary-hover: #3a3a3c;
+  --ah-primary-soft: rgba(72, 72, 74, 0.12);
+  --ah-ring: rgba(72, 72, 74, 0.45);
+}
+[data-theme="dark"][data-accent="graphite"] {
+  /* 深色模式填充按钮用深色字（白字压亮色只有 2~3:1） */
+  --ah-primary-fg: #0a0a0a;
+  --ah-primary: #98989d;      /* 近黑字 6.89:1 */
+  --ah-primary-hover: #adadb2;
+  --ah-primary-soft: rgba(152, 152, 157, 0.18);
+  --ah-ring: rgba(152, 152, 157, 0.50);
 }
 
 /* ---------- shadcn / beUI compat layer ---------- */
@@ -130,19 +202,23 @@
   --color-success: var(--ah-success);
   --color-warning: var(--ah-warning);
   --color-info: var(--ah-info);
+  --color-danger: var(--ah-danger);
+  /* 毛玻璃层：导航 / 吸顶栏用半透明 + backdrop-blur 实现，不写死纯色 */
+  --color-material: var(--ah-material);
+  --color-material-strong: var(--ah-material-strong);
 
   --shadow-sm: var(--ah-shadow-sm);
   --shadow-md: var(--ah-shadow-md);
   --shadow-lg: var(--ah-shadow-lg);
-  --shadow-glow: var(--ah-glow);
 
+  /* 圆角收紧到 Apple 区间：卡片 12–16 / 控件 10 */
   --radius-sm: 8px;
   --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 18px;
-  --radius-2xl: 24px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
 
-  --font-sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", sans-serif;
   --font-mono: "Cascadia Code", "JetBrains Mono", Consolas, "SFMono-Regular", Menlo, monospace;
 
   --ease-out-expo: cubic-bezier(0.22, 1, 0.36, 1);
@@ -190,12 +266,40 @@
   }
   ::selection {
     background: var(--ah-primary-soft);
-    color: var(--ah-primary);
+    color: var(--ah-text);
   }
+  /* 焦点环：Apple 用柔和的 accent 光圈（HIG: 键盘可达性优先于视觉轻盈） */
   :focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 1px;
+    border-radius: 4px;
   }
+  /* 尊重系统「减少动态效果」设置 */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* ============================================================
+   Material —— 毛玻璃层
+   吸顶筛选台 / 标题栏 / 侧边栏统一用它，替代纯色背景
+   ============================================================ */
+@utility ah-material {
+  background: var(--ah-material);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+}
+@utility ah-material-strong {
+  background: var(--ah-material-strong);
+  backdrop-filter: saturate(180%) blur(24px);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
 }
 
 /* ---------- scrollbars ---------- */
@@ -219,6 +323,14 @@
 }
 ::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/* 隐藏滚动条但保持可滚动（用于横向胶囊条） */
+.ah-noscroll {
+  scrollbar-width: none;
+}
+.ah-noscroll::-webkit-scrollbar {
+  display: none;
 }
 
 /* ============================================================

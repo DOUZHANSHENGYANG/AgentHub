@@ -2,11 +2,11 @@ import { forwardRef, type InputHTMLAttributes, type LabelHTMLAttributes, type Te
 import { cn } from "@/lib/utils";
 
 const base =
-  "w-full rounded-lg border border-input bg-surface px-3 text-sm text-foreground outline-none transition-[border-color,box-shadow] placeholder:text-ink-3 focus:border-primary focus:shadow-[0_0_0_3px_var(--ah-primary-soft)] disabled:cursor-not-allowed disabled:opacity-50";
+  "w-full rounded-md border border-input bg-surface px-3 text-[13px] text-foreground outline-none transition-[border-color,box-shadow,background-color] duration-150 placeholder:text-ink-3 hover:border-border-strong focus:border-primary focus:shadow-[0_0_0_3px_var(--ah-primary-soft)] disabled:cursor-not-allowed disabled:opacity-50";
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
   ({ className, ...props }, ref) => (
-    <input ref={ref} className={cn(base, "h-9", className)} {...props} />
+    <input ref={ref} className={cn(base, "h-[34px]", className)} {...props} />
   ),
 );
 Input.displayName = "Input";

@@ -1,4 +1,5 @@
-import { FolderOpen, FileText, Sparkles, Server } from "lucide-react";
+import { useEffect, useState } from "react";
+import { FolderOpen, FileText, ShieldCheck, Sparkles, Server } from "lucide-react";
 import { motion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
@@ -11,6 +12,7 @@ const items: { id: Page; icon: typeof FileText; key: string }[] = [
   { id: "prompts", icon: FileText, key: "nav.prompts" },
   { id: "mcp", icon: Server, key: "nav.mcp" },
   { id: "skills", icon: Sparkles, key: "nav.skills" },
+  { id: "vault", icon: ShieldCheck, key: "nav.vault" },
 ];
 
 export function Sidebar() {
@@ -21,11 +23,19 @@ export function Sidebar() {
   const mcp = useData((s) => s.mcp.length);
   const skills = useData((s) => s.skills.length);
   const dataDirs = useSettings((s) => s.info?.dataDirs.root ?? "");
+  const [harnessCount, setHarnessCount] = useState<number | undefined>(undefined);
 
-  const counts: Partial<Record<Page, number>> = { prompts, mcp, skills };
+  useEffect(() => {
+    void api
+      .vaultInstalledCount()
+      .then(setHarnessCount)
+      .catch(() => setHarnessCount(undefined));
+  }, []);
+
+  const counts: Partial<Record<Page, number>> = { prompts, mcp, skills, vault: harnessCount };
 
   return (
-    <aside className="flex w-[200px] shrink-0 flex-col border-r border-border bg-surface">
+    <aside className="ah-material flex w-[168px] shrink-0 flex-col border-r border-border xl:w-[200px]">
       <nav className="flex flex-col gap-1 p-3">
         {items.map(({ id, icon: Icon, key }) => {
           const active = page === id;
@@ -35,7 +45,7 @@ export function Sidebar() {
               type="button"
               onClick={() => setPage(id)}
               className={cn(
-                "relative flex h-10 items-center gap-2.5 rounded-lg px-3 text-sm outline-none transition-colors",
+                "relative flex h-9 items-center gap-2.5 rounded-md px-2.5 text-[13px] outline-none transition-colors duration-150",
                 active ? "text-foreground" : "text-ink-2 hover:bg-surface-2 hover:text-foreground",
               )}
             >

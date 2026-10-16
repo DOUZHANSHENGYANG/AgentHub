@@ -1,10 +1,12 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ArrowLeft, CloudUpload, Cog, FolderOpen, FolderPlus, GitBranch, Globe2, HardDrive, Info, Languages, LogOut, Minus, Moon, Palette, Square, Sun, X } from "lucide-react";
+import { motion } from "motion/react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { toast, Toaster } from "sonner";
 import { open } from "@tauri-apps/plugin-dialog";
+import { HarnessOrderSection } from "@/components/HarnessOrderSection";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -12,8 +14,18 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useData } from "@/stores/data";
-import { useSettings } from "@/stores/settings";
+import { ACCENTS, useSettings } from "@/stores/settings";
 import { useUi } from "@/stores/ui";
+
+/** 设置分区：每个分区是一页，侧边栏切换只显示当前页 */
+type SettingsTab = "appearance" | "storage" | "sync" | "about";
+
+const SETTINGS_NAV: { id: SettingsTab; icon: typeof Palette; key: string }[] = [
+  { id: "appearance", icon: Palette, key: "settings.appearance" },
+  { id: "storage", icon: HardDrive, key: "settings.storage" },
+  { id: "sync", icon: CloudUpload, key: "sync.title" },
+  { id: "about", icon: Info, key: "settings.about" },
+];
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -33,10 +45,12 @@ function Section({ icon, title, children }: { icon: ReactNode; title: string; ch
   );
 }
 
-function SettingsBody() {
+function SettingsBody({ tab }: { tab: SettingsTab }) {
   const { t } = useTranslation();
   const theme = useSettings((s) => s.theme);
   const setTheme = useSettings((s) => s.setTheme);
+  const accent = useSettings((s) => s.accent);
+  const setAccent = useSettings((s) => s.setAccent);
   const language = useSettings((s) => s.language);
   const setLanguage = useSettings((s) => s.setLanguage);
   const info = useSettings((s) => s.info);
@@ -200,6 +214,8 @@ function SettingsBody() {
 
   return (
     <div className="flex flex-col gap-5">
+      {/* 只挂载当前页：切页时不保留其它页的滚动位置与瞬时状态，符合「独立显示」的预期 */}
+      {tab === "appearance" ? (
       <Section icon={<Palette className="size-4 text-primary" />} title={t("settings.appearance")}>
         <div>
           <div className="mb-2 text-xs font-medium text-ink-2">{t("settings.theme")}</div>
@@ -217,11 +233,11 @@ function SettingsBody() {
                   theme === th ? "border-primary shadow-[0_0_0_3px_var(--ah-primary-soft)]" : "border-border hover:border-border-strong",
                 )}
               >
+                {/* 预览色块：把 data-theme 放在色块自身，让该模式的 token 就地解析。
+                    原先这里写死了旧调色板的十六进制，主题改版后预览与实际不符。 */}
                 <span
-                  className={cn(
-                    "grid size-10 shrink-0 place-items-center rounded-lg border",
-                    th === "light" ? "border-[#e3e6ed] bg-[#f4f5f8] text-[#171a22]" : "border-[#232838] bg-[#0a0c11] text-[#e7e9f0]",
-                  )}
+                  data-theme={th}
+                  className="grid size-10 shrink-0 place-items-center rounded-lg border border-border bg-background text-foreground"
                 >
                   {th === "light" ? <Sun className="size-4" /> : <Moon className="size-4" />}
                 </span>
@@ -237,6 +253,43 @@ function SettingsBody() {
         </div>
 
         <div>
+          <div className="mb-2 text-xs font-medium text-ink-2">{t("settings.accent")}</div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {ACCENTS.map((a) => {
+              const active = accent === a;
+              return (
+                <button
+                  key={a}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => void setAccent(a)}
+                  className={cn(
+                    "flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left outline-none transition-all",
+                    active
+                      ? "border-primary shadow-[0_0_0_3px_var(--ah-primary-soft)]"
+                      : "border-border hover:border-border-strong",
+                  )}
+                >
+                  {/* 色块：把 data-theme / data-accent 放到色块本身，
+                      让 CSS 里那一组变量就地解析 —— 不在这里重复写十六进制，
+                      避免调色板出现两份互不同步的定义 */}
+                  <span
+                    data-theme={theme}
+                    data-accent={a}
+                    className="size-5 shrink-0 rounded-full border border-border"
+                    style={{ background: "var(--ah-primary)" }}
+                  />
+                  <span className="min-w-0 truncate text-[12px] font-medium text-foreground">
+                    {t(`settings.accent_${a}`)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-ink-3">{t("settings.accentHint")}</p>
+        </div>
+
+        <div>
           <div className="mb-2 text-xs font-medium text-ink-2">{t("settings.language")}</div>
           <div className="flex gap-2">
             {(["zh", "en"] as const).map((lang) => (
@@ -248,7 +301,9 @@ function SettingsBody() {
           </div>
         </div>
       </Section>
+      ) : null}
 
+      {tab === "storage" ? (
       <Section icon={<HardDrive className="size-4 text-primary" />} title={t("settings.storage")}>
         <div>
           <div className="mb-2 text-xs font-medium text-ink-2">{t("settings.dataDir")}</div>
@@ -313,8 +368,12 @@ function SettingsBody() {
             ) : null}
           </div>
         </div>
-      </Section>
 
+        <HarnessOrderSection />
+      </Section>
+      ) : null}
+
+      {tab === "sync" ? (
       <Section icon={<CloudUpload className="size-4 text-primary" />} title={t("sync.title")}>
         <p className="text-xs leading-relaxed text-ink-3">{t("sync.desc")}</p>
 
@@ -429,7 +488,9 @@ function SettingsBody() {
           </>
         ) : null}
       </Section>
+      ) : null}
 
+      {tab === "about" ? (
       <Section icon={<Info className="size-4 text-primary" />} title={t("settings.about")}>
         <p className="text-xs leading-relaxed text-ink-2">{t("settings.aboutDesc")}</p>
         <div className="flex flex-wrap gap-1.5">
@@ -445,6 +506,7 @@ function SettingsBody() {
         </div>
         <div className="text-[11px] text-ink-3">{t("settings.version")}: 0.1.0</div>
       </Section>
+      ) : null}
     </div>
   );
 }
@@ -460,12 +522,13 @@ export function SettingsView() {
   const setLanguage = useSettings((s) => s.setLanguage);
   const goBack = useUi((s) => s.goBack);
   const win = getCurrentWindow();
+  const [tab, setTab] = useState<SettingsTab>("appearance");
 
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
       <header
         data-tauri-drag-region
-        className="flex h-11 shrink-0 select-none items-center border-b border-border bg-surface pl-3.5"
+        className="ah-material-strong flex h-11 shrink-0 select-none items-center border-b border-border pl-3.5"
       >
         <button
           type="button"
@@ -517,10 +580,40 @@ export function SettingsView() {
         </button>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-        <div className="mx-auto max-w-3xl">
-          <p className="mb-4 text-xs leading-relaxed text-ink-3">{t("settings.subtitle")}</p>
-          <SettingsBody />
+      <div className="flex min-h-0 flex-1">
+        {/* 设置侧边栏：每个分区独立一页，切换只显示当前页 */}
+        <nav className="ah-material flex w-[168px] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border p-2.5 xl:w-[190px]">
+          {SETTINGS_NAV.map(({ id, icon: Icon, key }) => {
+            const active = tab === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setTab(id)}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "relative flex h-9 items-center gap-2.5 rounded-lg px-3 text-left text-xs font-medium outline-none transition-colors",
+                  active ? "text-primary" : "text-ink-2 hover:bg-surface-2 hover:text-foreground",
+                )}
+              >
+                {active ? (
+                  <motion.span
+                    layoutId="settings-pill"
+                    className="absolute inset-0 rounded-lg bg-primary-soft"
+                    transition={{ type: "spring", stiffness: 420, damping: 34 }}
+                  />
+                ) : null}
+                <Icon className="relative z-10 size-4 shrink-0" />
+                <span className="relative z-10">{t(key)}</span>
+              </button>
+            );
+          })}
+        </nav>
+        {/* key=tab 让切页后内容区滚动回顶部，而不是继承上一页的滚动位置 */}
+        <div key={tab} className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+          <div className="mx-auto max-w-3xl">
+            <SettingsBody tab={tab} />
+          </div>
         </div>
       </div>
 
