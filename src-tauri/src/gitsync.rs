@@ -5,7 +5,6 @@
 use crate::store::AppH;
 use serde::Serialize;
 use std::path::Path;
-use std::process::Command;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,7 +19,7 @@ pub struct SyncStatus {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    let out = crate::store::silent_command("git")
         .current_dir(dir)
         .args(args)
         .output()

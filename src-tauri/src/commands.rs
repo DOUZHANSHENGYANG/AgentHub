@@ -33,6 +33,14 @@ pub fn set_prefs(app: AppH, language: Option<String>, theme: Option<String>) -> 
 }
 
 #[tauri::command]
+pub fn set_harness_order(app: AppH, order: Vec<String>) -> Result<SettingsInfo, String> {
+    let mut s = store::load_settings(&app);
+    s.harness_order = order;
+    store::save_settings(&app, &s)?;
+    Ok(store::settings_info(&app))
+}
+
+#[tauri::command]
 pub fn add_skill_source_dir(app: AppH, path: String) -> Result<SettingsInfo, String> {
     let mut s = store::load_settings(&app);
     if !s.skill_source_dirs.contains(&path) {
@@ -106,6 +114,20 @@ pub fn save_skill(app: AppH, payload: SkillSavePayload) -> Result<SkillMeta, Str
     skills::save_skill(&app, payload)
 }
 
+/// 从 ZIP 包导入技能（自动解压，支持内含一层根目录）
+#[tauri::command]
+pub async fn import_skill_zip(app: AppH, path: String, overwrite: bool) -> Result<SkillMeta, String> {
+    let name = tauri::async_runtime::spawn_blocking({
+        let app = app.clone();
+        let path = path.clone();
+        move || skills::import_skill_zip(&app, &path, overwrite)
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))??;
+    let meta = skills::read_skill(&app, &name)?;
+    Ok(meta.meta)
+}
+
 #[tauri::command]
 pub fn import_skill_folder(app: AppH, path: String, overwrite: bool) -> Result<SkillMeta, String> {
     let src = std::path::PathBuf::from(&path);
@@ -123,8 +145,32 @@ pub fn delete_skill(app: AppH, dir_name: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn scan_harnesses(app: AppH) -> Result<Vec<HarnessReport>, String> {
-    Ok(harness::scan(&app))
+pub fn clear_skill_versions(app: AppH, dir_name: String) -> Result<u32, String> {
+    skills::clear_skill_versions(&app, &dir_name)
+}
+
+#[tauri::command]
+pub fn release_skill_version(
+    app: AppH,
+    dir_name: String,
+    level: String,
+    note: String,
+) -> Result<serde_json::Value, String> {
+    let (version, snapshot) = skills::release_version(&app, &dir_name, &level, &note)?;
+    Ok(serde_json::json!({ "version": version, "snapshot": snapshot }))
+}
+
+#[tauri::command]
+pub fn ensure_skill_protocol(app: AppH, dir_name: String) -> Result<serde_json::Value, String> {
+    let (created, version) = skills::ensure_protocol(&app, &dir_name)?;
+    Ok(serde_json::json!({ "created": created, "version": version }))
+}
+
+#[tauri::command]
+pub async fn scan_harnesses(app: AppH) -> Result<Vec<HarnessReport>, String> {
+    tauri::async_runtime::spawn_blocking(move || Ok(harness::scan(&app)))
+        .await
+        .map_err(|e| format!("任务失败: {e}"))?
 }
 #[tauri::command]
 pub fn import_from_harness(
@@ -147,12 +193,65 @@ pub fn apply_to_harness(app: AppH, harness: String, kind: String, names: Vec<Str
 }
 
 #[tauri::command]
+pub fn read_harness_config(app: AppH, harness: String) -> Result<Value, String> {
+    harness::read_config(&app, &harness)
+}
+
+#[tauri::command]
+pub fn write_harness_config(app: AppH, harness: String, text: String) -> Result<Value, String> {
+    harness::write_config(&app, &harness, &text)
+}
+
+#[tauri::command]
+pub fn merge_harness_config(app: AppH, harness: String, text: String, json: String) -> Result<String, String> {
+    harness::merge_mcp_json(&app, &harness, &text, &json)
+}
+
+#[tauri::command]
+pub fn remove_from_harness(app: AppH, harness: String, kind: String, names: Vec<String>) -> Result<ApplyResult, String> {
+    if kind != "mcp" {
+        return Err("仅支持 MCP 条目移除".into());
+    }
+    Ok(harness::remove_mcp(&app, &harness, &names))
+}
+
+/// 技能目录树
+#[tauri::command]
+pub fn list_skill_files(app: AppH, dir_name: String) -> Result<crate::models::SkillFileNode, String> {
+    skills::list_skill_files(&app, &dir_name)
+}
+
+/// 读取技能内的文件（实时阅读）
+#[tauri::command]
+pub fn read_skill_file(app: AppH, dir_name: String, rel_path: String) -> Result<crate::models::SkillFileContent, String> {
+    skills::read_skill_file(&app, &dir_name, &rel_path)
+}
+
+/// 用系统默认程序打开技能内的某个文件（PDF / Word / 表格等无法内联预览的类型）。
+/// 由后端拼绝对路径并做目录穿越校验，避免前端依赖本机路径分隔符。
+#[tauri::command]
+pub fn open_skill_file(app: AppH, dir_name: String, rel_path: String) -> Result<(), String> {
+    let p = skills::resolve_skill_file(&app, &dir_name, &rel_path)?;
+    tauri_plugin_opener::open_path(&p, None::<&str>).map_err(|e| e.to_string())
+}
+
+/// 用系统默认程序打开任意路径（用于打开导出目录等）
+#[tauri::command]
+pub fn open_path(path: String) -> Result<(), String> {
+    let p = std::path::PathBuf::from(&path);
+    if !p.exists() {
+        return Err(format!("文件不存在: {path}"));
+    }
+    tauri_plugin_opener::open_path(&p, None::<&str>).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn reveal_path(path: String) -> Result<(), String> {
     let p = std::path::PathBuf::from(&path);
     if p.exists() {
         tauri_plugin_opener::reveal_item_in_dir(&p).map_err(|e| e.to_string())
     } else if let Some(parent) = p.parent() {
-        std::process::Command::new("explorer")
+        crate::store::silent_command("explorer")
             .arg(parent)
             .spawn()
             .map(|_| ())
@@ -218,6 +317,28 @@ pub fn set_skill_status(app: AppH, dir_name: String, status: String, superseded_
     skills::read_skill(&app, &dir_name).map(|d| d.meta)
 }
 
+/// 批量打包为规范 .skillpack，并在输出目录生成 index.json。
+#[tauri::command]
+pub async fn pack_skills_batch(
+    app: AppH,
+    dir_names: Vec<String>,
+    out_dir: String,
+) -> Result<crate::models::PackBatchReport, String> {
+    tauri::async_runtime::spawn_blocking(move || skills::pack_many(&app, &dir_names, &out_dir))
+        .await
+        .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 打包前的规范性预检（不写盘），用于前端提前提示
+#[tauri::command]
+pub fn check_pack_ready(app: AppH, dir_name: String) -> Result<Vec<String>, String> {
+    let dir = store::data_root(&app).join("skills").join(&dir_name);
+    if !dir.is_dir() {
+        return Err(format!("skill not found: {dir_name}"));
+    }
+    crate::skill_toml::check_pack_ready(&dir).map(|(_, _, w)| w)
+}
+
 #[tauri::command]
 pub fn pack_skill(app: AppH, dir_name: String, out_dir: String) -> Result<String, String> {
     use crate::skill_toml;
@@ -232,6 +353,63 @@ pub fn pack_skill(app: AppH, dir_name: String, out_dir: String) -> Result<String
     skill_toml::pack(&dir, &out).map(|p| p.to_string_lossy().into_owned())
 }
 
+/// 读取某技能的审查报告（含逐条发现 + 人工复审状态）。
+#[tauri::command]
+pub fn read_vet_report(app: AppH, dir_name: String) -> Result<Option<crate::models::VetReportRow>, String> {
+    skills::read_vet_report(&app, &dir_name)
+}
+
+/// 人工复审：忽略 / 恢复单条发现。返回 (待复核数, 已忽略数)。
+#[tauri::command]
+pub fn review_vet_finding(
+    app: AppH,
+    dir_name: String,
+    rule: String,
+    file: String,
+    line: usize,
+    ignored: bool,
+) -> Result<(u32, u32), String> {
+    skills::review_finding(&app, &dir_name, &rule, &file, line, ignored)
+}
+
+/// 人工复审：忽略全部未忽略的发现。返回忽略条数。
+#[tauri::command]
+pub fn ignore_all_vet_findings(app: AppH, dir_name: String) -> Result<u32, String> {
+    skills::ignore_all_findings(&app, &dir_name)
+}
+
+/// 人工复审：给出整体复核结论（approved / rejected / 空 = 清除）。
+#[tauri::command]
+pub fn set_vet_review(app: AppH, dir_name: String, verdict: String, note: String) -> Result<(), String> {
+    skills::set_review_verdict(&app, &dir_name, &verdict, &note)
+}
+
+/// 一键为技能生成 SKILL.toml 并自动安全审查（批量）。
+#[tauri::command]
+pub async fn onboard_skills_batch(
+    app: AppH,
+    dir_names: Vec<String>,
+    only_missing: bool,
+    vet: bool,
+) -> Result<crate::models::OnboardReport, String> {
+    tauri::async_runtime::spawn_blocking(move || Ok(skills::onboard_many(&app, &dir_names, only_missing, vet)))
+        .await
+        .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 为技能补一条初始版本快照（用于把历史技能纳入版本管理）。
+/// 一次性修复历史遗留的 tags 畸形数据（如 '["自习"]'）。
+#[tauri::command]
+pub fn repair_skill_tags(app: AppH) -> Result<serde_json::Value, String> {
+    let (fixed, detail) = skills::repair_tags(&app)?;
+    Ok(serde_json::json!({ "fixed": fixed, "skills": detail }))
+}
+
+#[tauri::command]
+pub fn seed_skill_version(app: AppH, dir_name: String, note: String) -> Result<bool, String> {
+    skills::seed_version(&app, &dir_name, &note)
+}
+
 #[tauri::command]
 pub fn vet_skill(app: AppH, dir_name: String) -> Result<serde_json::Value, String> {
     use crate::{skill_toml, vet};
@@ -243,11 +421,20 @@ pub fn vet_skill(app: AppH, dir_name: String) -> Result<serde_json::Value, Strin
     skill_toml::load(&dir)  // 仅当已接入协议时写回 [vet]
         .ok_or("该技能尚未接入 SKILL.toml 协议：请先在编辑中保存一次")?;
     vet::write_vet(&dir, &report)?;
+    // 明细落盘，供人工复审逐条处置
+    let _ = skills::save_vet_report(&app, &dir_name, &report);
     Ok(serde_json::to_value(&report).unwrap_or(serde_json::Value::Null))
 }
 
 #[tauri::command]
-pub fn install_skillpack(app: AppH, path: String, overwrite: bool) -> Result<crate::install::InstallReport, String> {
+pub async fn install_skillpack(app: AppH, path: String, overwrite: bool) -> Result<crate::install::InstallReport, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::install::install_skillpack(std::path::Path::new(&path), &crate::store::data_root(&app).join("skills"), overwrite))
+        .await
+        .map_err(|e| format!("任务失败: {e}"))?
+}
+
+#[allow(dead_code)]
+fn install_skillpack_blocking(app: AppH, path: String, overwrite: bool) -> Result<crate::install::InstallReport, String> {
     let pack = std::path::PathBuf::from(&path);
     if !pack.is_dir() {
         return Err("所选路径不是文件夹".into());
@@ -298,9 +485,52 @@ pub fn update_skill_ext(
     skills::read_skill(&app, &dir_name).map(|d| d.meta)
 }
 
+// ---------------- 腾讯 SkillHub 市场（skillhub.cn） ----------------
+
+/// 搜索 / 浏览市场。网络请求是阻塞的，放后台线程池避免冻结 UI。
 #[tauri::command]
-pub fn git_fetch_skills(url: String) -> Result<serde_json::Value, String> {
-    use std::process::Command;
+pub async fn skillhub_search(
+    keyword: String,
+    category: String,
+    source: String,
+    sort: String,
+    page: u32,
+    page_size: u32,
+) -> Result<crate::skillhub::MarketPage, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::skillhub::search(&keyword, &category, &source, &sort, page, page_size)
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))?
+}
+
+#[tauri::command]
+pub async fn skillhub_categories() -> Result<Vec<crate::skillhub::MarketCategory>, String> {
+    tauri::async_runtime::spawn_blocking(crate::skillhub::categories)
+        .await
+        .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 批量安装所选技能：逐个下载 ZIP → 复用 `import_skill_zip`（同一套 zip-slip / zip-bomb 防护）
+#[tauri::command]
+pub async fn skillhub_install(
+    app: AppH,
+    targets: Vec<crate::skillhub::InstallTarget>,
+    overwrite: bool,
+) -> Result<Vec<crate::skillhub::MarketInstallReport>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::skillhub::install(&app, &targets, overwrite))
+        .await
+        .map_err(|e| format!("任务失败: {e}"))
+}
+#[tauri::command]
+pub async fn git_fetch_skills(url: String) -> Result<serde_json::Value, String> {
+    // git clone 是阻塞操作，放到后台线程池，避免冻结 UI
+    tauri::async_runtime::spawn_blocking(move || git_fetch_skills_blocking(url))
+        .await
+        .map_err(|e| format!("任务失败: {e}"))?
+}
+
+fn git_fetch_skills_blocking(url: String) -> Result<serde_json::Value, String> {
     let url = url.trim().to_string();
     if url.is_empty() || !(url.starts_with("https://") || url.starts_with("http://") || url.starts_with("git@")) {
         return Err("请输入有效的 https:// 或 git@ 仓库地址".into());
@@ -308,7 +538,7 @@ pub fn git_fetch_skills(url: String) -> Result<serde_json::Value, String> {
     let id = crate::models::new_id();
     let tmp = std::env::temp_dir().join(format!("agenthub-git-{id}"));
     let _ = std::fs::remove_dir_all(&tmp);
-    let out = Command::new("git")
+    let out = crate::store::silent_command("git")
         .args(["clone", "--depth", "1", &url])
         .arg(&tmp)
         .output();
@@ -394,14 +624,45 @@ pub fn sync_set_remote(app: AppH, url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn sync_push(app: AppH, message: String, authed: bool, provider: String) -> Result<String, String> {
-    crate::gitsync::push(&app, &message, authed, &provider)
+pub async fn sync_push(app: AppH, message: String, authed: bool, provider: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::gitsync::push(&app, &message, authed, &provider))
+        .await
+        .map_err(|e| format!("任务失败: {e}"))?
+}
+
+
+#[tauri::command]
+pub async fn sync_pull(app: AppH, authed: bool, provider: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::gitsync::pull(&app, authed, &provider))
+        .await
+        .map_err(|e| format!("任务失败: {e}"))?
+}
+
+// ---------------- AI 工具版本管理 ----------------
+
+#[tauri::command]
+pub async fn tool_list() -> Result<crate::toolmgr::ToolList, String> {
+    tauri::async_runtime::spawn_blocking(crate::toolmgr::list)
+        .await
+        .map_err(|e| format!("任务失败: {e}"))
 }
 
 #[tauri::command]
-pub fn sync_pull(app: AppH, authed: bool, provider: String) -> Result<String, String> {
-    crate::gitsync::pull(&app, authed, &provider)
+pub async fn tool_check_latest() -> Result<crate::toolmgr::ToolList, String> {
+    // 逐个包查询 registry，属网络阻塞操作
+    tauri::async_runtime::spawn_blocking(crate::toolmgr::check_latest)
+        .await
+        .map_err(|e| format!("任务失败: {e}"))
 }
+
+/// 批量更新所选工具（npm i -g）。`npm install` 可能耗时数分钟，必须在后台线程。
+#[tauri::command]
+pub async fn tool_update(ids: Vec<String>) -> Result<Vec<crate::toolmgr::UpdateOutcome>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::toolmgr::update(&ids))
+        .await
+        .map_err(|e| format!("任务失败: {e}"))
+}
+
 
 #[tauri::command]
 pub fn auth_status(app: AppH) -> Result<serde_json::Value, String> {
@@ -431,4 +692,83 @@ pub fn auth_logout(app: AppH) -> Result<(), String> {
 #[tauri::command]
 pub fn auth_create_repo(app: AppH, provider: String) -> Result<String, String> {
     crate::auth::create_backup_repo(&app, &provider)
+}
+
+#[tauri::command]
+pub fn read_import_file(path: String) -> Result<std::collections::HashMap<String, String>, String> {
+    let p = std::path::Path::new(&path);
+    if !p.is_file() {
+        return Err("file not found".into());
+    }
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext != "json" && ext != "jsonc" {
+        return Err("only .json files are supported".into());
+    }
+    let text = std::fs::read_to_string(p).map_err(|e| e.to_string())?;
+    let text = text.trim_start_matches('\u{feff}').to_string();
+    let name = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("config.json")
+        .to_string();
+    let mut m = std::collections::HashMap::new();
+    m.insert("name".to_string(), name);
+    m.insert("text".to_string(), text);
+    Ok(m)
+}
+
+// ---------------- 配置版本库（Config Vault） ----------------
+
+#[tauri::command]
+pub fn vault_status(app: AppH) -> Result<Vec<crate::configvault::VaultStatus>, String> {
+    Ok(crate::configvault::status(&app))
+}
+
+#[tauri::command]
+pub fn vault_installed_count(app: AppH) -> Result<usize, String> {
+    Ok(crate::configvault::installed_count(&app))
+}
+
+#[tauri::command]
+pub fn vault_index(app: AppH) -> Result<crate::configvault::VaultIndex, String> {
+    Ok(crate::configvault::index(&app))
+}
+
+#[tauri::command]
+pub fn vault_set_watched(app: AppH, watched: Vec<String>) -> Result<crate::configvault::VaultIndex, String> {
+    crate::configvault::set_watched(&app, watched)
+}
+
+#[tauri::command]
+pub fn vault_set_daily(app: AppH, daily: bool) -> Result<crate::configvault::VaultIndex, String> {
+    crate::configvault::set_daily(&app, daily)
+}
+
+#[tauri::command]
+pub fn vault_snapshot(app: AppH, harnesses: Vec<String>, kind: String) -> Result<Vec<crate::configvault::ConfigVersion>, String> {
+    crate::configvault::snapshot(&app, &harnesses, &kind)
+}
+
+#[tauri::command]
+pub fn vault_maybe_daily(app: AppH) -> Result<usize, String> {
+    crate::configvault::maybe_daily(&app)
+}
+
+#[tauri::command]
+pub fn vault_read_version(app: AppH, harness: String, v: u32) -> Result<String, String> {
+    crate::configvault::read_version(&app, &harness, v)
+}
+
+#[tauri::command]
+pub fn vault_restore(app: AppH, harness: String, v: u32) -> Result<String, String> {
+    crate::configvault::restore(&app, &harness, v)
+}
+
+#[tauri::command]
+pub fn vault_clear(app: AppH, harnesses: Vec<String>) -> Result<(), String> {
+    crate::configvault::clear(&app, &harnesses)
 }

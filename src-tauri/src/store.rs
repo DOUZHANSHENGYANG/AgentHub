@@ -6,6 +6,19 @@ use tauri::{Manager, Wry};
 
 pub type AppH = tauri::AppHandle<Wry>;
 
+/// 构造一个「不弹控制台黑框」的命令（Windows 下 git 等子进程默认会闪出黑框）
+pub fn silent_command(program: &str) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 pub fn es(e: std::io::Error) -> String {
     e.to_string()
 }

@@ -332,7 +332,19 @@ fn entry_to_detected(name: &str, v: &Value, format: Format) -> DetectedServer {
         .unwrap_or_default();
     let env = as_str_map(v.get("env"));
     let url = v.get("url").and_then(|x| x.as_str()).unwrap_or("").to_string();
-    let headers = as_str_map(v.get("headers"));
+    // 请求头：优先 headers，回退 http_headers（Codex TOML 风格）
+    let mut headers = as_str_map(v.get("headers"));
+    if headers.is_empty() {
+        headers = as_str_map(v.get("http_headers"));
+    }
+    // Codex: bearer_token_env_var → 生成 Authorization: Bearer ${VAR} 说明
+    if headers.is_empty() {
+        if let Some(envvar) = v.get("bearer_token_env_var").and_then(|x| x.as_str()) {
+            if !envvar.is_empty() {
+                headers.insert("Authorization".to_string(), format!("Bearer ${envvar}"));
+            }
+        }
+    }
     let ttype = v
         .get("type")
         .and_then(|x| x.as_str())
@@ -465,6 +477,50 @@ fn scan_skills_dirs(dirs: &[PathBuf]) -> (Vec<DetectedSkill>, Vec<String>) {
     (out, found_dirs)
 }
 
+/// 返回所有支持 MCP 的工具 (id, name)，按内置定义顺序
+pub fn mcp_capable(app: &AppH) -> Vec<(String, String)> {
+    defs(app)
+        .into_iter()
+        .filter(|d| !d.mcp_sources.is_empty())
+        .map(|d| (d.id.to_string(), d.name.to_string()))
+        .collect()
+}
+
+/// 解析某工具的 MCP 配置文件路径（优先已存在的 source，否则第一个）
+pub fn config_target(app: &AppH, harness_id: &str) -> Result<(String, std::path::PathBuf), String> {
+    let Some(def) = defs(app).into_iter().find(|d| d.id == harness_id) else {
+        return Err(format!("未知工具: {harness_id}"));
+    };
+    let Some(src) = def
+        .mcp_sources
+        .iter()
+        .find(|s| s.path.exists())
+        .or_else(|| def.mcp_sources.first())
+    else {
+        return Err("该工具不支持 MCP 配置".into());
+    };
+    Ok((def.name.to_string(), src.path.clone()))
+}
+
+/// 按该工具的格式校验配置文本（JSON / TOML）
+pub fn validate_config_text(app: &AppH, harness_id: &str, text: &str) -> Result<(), String> {
+    let Some(def) = defs(app).into_iter().find(|d| d.id == harness_id) else {
+        return Err(format!("未知工具: {harness_id}"));
+    };
+    let Some(src) = def.mcp_sources.first() else {
+        return Err("该工具不支持 MCP 配置".into());
+    };
+    match src.format {
+        Format::Toml => {
+            toml::from_str::<toml::Value>(text).map_err(|e| format!("TOML 语法错误: {e}"))?;
+        }
+        _ => {
+            serde_json::from_str::<Value>(text).map_err(|e| format!("JSON 语法错误: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
 pub fn scan(app: &AppH) -> Vec<HarnessReport> {
     defs(app)
         .into_iter()
@@ -594,6 +650,8 @@ pub fn import(app: &AppH, harness_id: &str, kind: &str, selections: &[ImportSele
                         headers: d.headers.clone(),
                         tags: vec![],
                         enabled: true,
+                        targets: vec![harness_id.to_string()],
+                        targets_initialized: true,
                         origin: Some(Origin {
                             harness: harness_id.to_string(),
                             file: config_str.clone(),
@@ -682,6 +740,319 @@ fn opencode_entry(s: &McpServer) -> Value {
     Value::Object(m)
 }
 
+/// 从 harness 配置文件中移除指定 MCP 条目（自动备份；解析失败绝不写回）
+pub fn remove_mcp(app: &AppH, harness_id: &str, names: &[String]) -> ApplyResult {
+    let mut res = ApplyResult {
+        applied: vec![],
+        warnings: vec![],
+        backups: vec![],
+        errors: vec![],
+    };
+    // 版本库：受管工具写入前自动快照
+    let _ = crate::configvault::auto_snapshot(app, harness_id);
+    let Some(def) = defs(app).into_iter().find(|d| d.id == harness_id) else {
+        res.errors.push(format!("未知工具: {harness_id}"));
+        return res;
+    };
+    let Some(src) = def.mcp_sources.iter().find(|s| s.path.exists()).cloned() else {
+        res.warnings.push("该工具配置文件不存在，无需移除".into());
+        return res;
+    };
+    let path = src.path.clone();
+    if let Some(bak) = store::backup_file(&path).unwrap_or(None) {
+        res.backups.push(bak.to_string_lossy().into_owned());
+    }
+    match src.format {
+        Format::Toml => {
+            let text = match std::fs::read_to_string(&path) {
+                Ok(t) => t,
+                Err(e) => {
+                    res.errors.push(e.to_string());
+                    return res;
+                }
+            };
+            let mut root: toml::Value = match toml::from_str(&text) {
+                Ok(v) => v,
+                Err(e) => {
+                    res.errors.push(format!("配置文件解析失败，已取消写回: {e}"));
+                    return res;
+                }
+            };
+            if let Some(tbl) = root.get_mut(src.key).and_then(|v| v.as_table_mut()) {
+                for n in names {
+                    if tbl.remove(n).is_some() {
+                        res.applied.push(n.clone());
+                    } else {
+                        res.warnings.push(format!("{} 中未找到 {}", def.name, n));
+                    }
+                }
+            } else {
+                res.warnings.push("配置中没有 MCP 段".into());
+            }
+            match toml::to_string_pretty(&root) {
+                Ok(text) => {
+                    if let Err(e) = std::fs::write(&path, text) {
+                        res.errors.push(e.to_string());
+                    }
+                }
+                Err(e) => res.errors.push(e.to_string()),
+            }
+        }
+        _ => {
+            let text = match std::fs::read_to_string(&path) {
+                Ok(t) => t,
+                Err(e) => {
+                    res.errors.push(e.to_string());
+                    return res;
+                }
+            };
+            let mut root: Map<String, Value> = match serde_json::from_str::<Value>(&text) {
+                Ok(v) => v.as_object().cloned().unwrap_or_default(),
+                Err(e) => {
+                    res.errors.push(format!("配置文件解析失败（可能含注释），已取消写回: {e}"));
+                    return res;
+                }
+            };
+            if let Some(entries) = root.get_mut(src.key).and_then(|v| v.as_object_mut()) {
+                for n in names {
+                    if entries.remove(n).is_some() {
+                        res.applied.push(n.clone());
+                    } else {
+                        res.warnings.push(format!("{} 中未找到 {}", def.name, n));
+                    }
+                }
+            } else {
+                res.warnings.push("配置中没有 MCP 段".into());
+            }
+            match serde_json::to_string_pretty(&root) {
+                Ok(text) => {
+                    if let Err(e) = std::fs::write(&path, text) {
+                        res.errors.push(e.to_string());
+                    }
+                }
+                Err(e) => res.errors.push(e.to_string()),
+            }
+        }
+    }
+    res
+}
+
+/// 解析某工具的 MCP 配置文件：返回路径、文本、是否存在（供内嵌编辑器使用）
+/// 把一段标准 mcpServers JSON 合并进某工具的配置文本（按该工具的格式转换），返回新文本。
+/// 支持 JSON 与 TOML（Codex）两种目标格式；不写盘，交由前端预览/保存。
+pub fn merge_mcp_json(app: &AppH, harness_id: &str, text: &str, json_text: &str) -> Result<String, String> {
+    let Some(def) = defs(app).into_iter().find(|d| d.id == harness_id) else {
+        return Err(format!("未知工具: {harness_id}"));
+    };
+    let Some(src) = def.mcp_sources.first() else {
+        return Err("该工具不支持 MCP 配置".into());
+    };
+
+    // 解析粘贴的 JSON：支持 { mcpServers: {...} } / { servers: {...} } / 单个对象
+    let parsed: Value = serde_json::from_str(json_text).map_err(|e| format!("JSON 解析失败: {e}"))?;
+    let mut incoming: Vec<(String, McpServer)> = Vec::new();
+    let collect_from = |obj: &serde_json::Map<String, Value>| -> Vec<(String, McpServer)> {
+        let mut out = Vec::new();
+        for (name, v) in obj {
+            if let Some(s) = value_to_server(name, v) {
+                out.push((name.clone(), s));
+            }
+        }
+        out
+    };
+    if let Some(m) = parsed.get("mcpServers").and_then(|v| v.as_object()) {
+        incoming.extend(collect_from(m));
+    } else if let Some(m) = parsed.get("servers").and_then(|v| v.as_object()) {
+        incoming.extend(collect_from(m));
+    } else if let Some(obj) = parsed.as_object() {
+        if obj.contains_key("command") || obj.contains_key("url") {
+            if let Some(s) = value_to_server("imported-mcp", &parsed) {
+                incoming.push(("imported-mcp".to_string(), s));
+            }
+        } else {
+            incoming.extend(collect_from(obj));
+        }
+    }
+    if incoming.is_empty() {
+        return Err("未识别到任何 MCP 服务".into());
+    }
+
+    match src.format {
+        Format::Toml => {
+            let mut root: toml::Value = if text.trim().is_empty() {
+                toml::Value::Table(Default::default())
+            } else {
+                toml::from_str(text).map_err(|e| format!("当前配置 TOML 语法错误: {e}"))?
+            };
+            if !root.is_table() {
+                root = toml::Value::Table(Default::default());
+            }
+            let table = root.as_table_mut().unwrap();
+            let servers = table
+                .entry(src.key.to_string())
+                .or_insert_with(|| toml::Value::Table(Default::default()));
+            if !servers.is_table() {
+                *servers = toml::Value::Table(Default::default());
+            }
+            let smap = servers.as_table_mut().unwrap();
+            for (name, s) in &incoming {
+                let mut t = toml::value::Table::new();
+                if s.transport == "stdio" {
+                    t.insert("command".into(), toml::Value::String(s.command.clone()));
+                    if !s.args.is_empty() {
+                        t.insert(
+                            "args".into(),
+                            toml::Value::Array(
+                                s.args.iter().map(|a| toml::Value::String(a.clone())).collect(),
+                            ),
+                        );
+                    }
+                    if !s.env.is_empty() {
+                        let mut env_t = toml::value::Table::new();
+                        for (k, v) in &s.env {
+                            env_t.insert(k.clone(), toml::Value::String(v.clone()));
+                        }
+                        t.insert("env".into(), toml::Value::Table(env_t));
+                    }
+                } else {
+                    t.insert("url".into(), toml::Value::String(s.url.clone()));
+                    if !s.headers.is_empty() {
+                        let mut h_t = toml::value::Table::new();
+                        for (k, v) in &s.headers {
+                            h_t.insert(k.clone(), toml::Value::String(v.clone()));
+                        }
+                        t.insert("http_headers".into(), toml::Value::Table(h_t));
+                    }
+                }
+                smap.insert(name.clone(), toml::Value::Table(t));
+            }
+            toml::to_string_pretty(&root).map_err(|e| e.to_string())
+        }
+        _ => {
+            let mut root: Map<String, Value> = if text.trim().is_empty() {
+                Map::new()
+            } else {
+                serde_json::from_str::<Value>(text)
+                    .map_err(|e| format!("当前配置 JSON 语法错误: {e}"))?
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            let entries = root.entry(src.key.to_string()).or_insert_with(|| json!({}));
+            if !entries.is_object() {
+                *entries = json!({});
+            }
+            let map = entries.as_object_mut().unwrap();
+            for (name, s) in &incoming {
+                let entry = match src.format {
+                    Format::OpenCode => opencode_entry(s),
+                    _ => {
+                        if s.transport == "stdio" {
+                            stdio_entry(s)
+                        } else {
+                            remote_entry(s)
+                        }
+                    }
+                };
+                map.insert(name.clone(), entry);
+            }
+            serde_json::to_string_pretty(&root).map_err(|e| e.to_string())
+        }
+    }
+}
+
+/// 把单个 JSON 对象转成 McpServer（用于导入合并）
+fn value_to_server(name: &str, v: &Value) -> Option<McpServer> {
+    let d = entry_to_detected(name, v, Format::JsonFlat);
+    if d.command.is_empty() && d.url.is_empty() {
+        return None;
+    }
+    Some(McpServer {
+        id: String::new(),
+        name: name.to_string(),
+        description: String::new(),
+        transport: d.transport,
+        command: d.command,
+        args: d.args,
+        env: d.env,
+        url: d.url,
+        headers: d.headers,
+        tags: vec![],
+        enabled: true,
+        targets: vec![],
+        targets_initialized: true,
+        origin: None,
+        versions: vec![],
+        created_at: String::new(),
+        updated_at: String::new(),
+    })
+}
+
+pub fn read_config(app: &AppH, harness_id: &str) -> Result<Value, String> {
+    let Some(def) = defs(app).into_iter().find(|d| d.id == harness_id) else {
+        return Err(format!("未知工具: {harness_id}"));
+    };
+    let Some(src) = def
+        .mcp_sources
+        .iter()
+        .find(|s| s.path.exists())
+        .or_else(|| def.mcp_sources.first())
+    else {
+        return Err("该工具不支持 MCP 配置".into());
+    };
+    let exists = src.path.exists();
+    let text = if exists {
+        std::fs::read_to_string(&src.path).map_err(|e| e.to_string())?
+    } else {
+        String::new()
+    };
+    Ok(json!({
+        "path": src.path.to_string_lossy(),
+        "text": text,
+        "exists": exists,
+        "format": match src.format {
+            Format::Toml => "toml",
+            Format::OpenCode => "opencode",
+            _ => "json",
+        },
+    }))
+}
+
+/// 写回某工具的 MCP 配置文件：先校验（JSON/TOML），自动备份，再写入。
+pub fn write_config(app: &AppH, harness_id: &str, text: &str) -> Result<Value, String> {
+    let Some(def) = defs(app).into_iter().find(|d| d.id == harness_id) else {
+        return Err(format!("未知工具: {harness_id}"));
+    };
+    let Some(src) = def
+        .mcp_sources
+        .iter()
+        .find(|s| s.path.exists())
+        .or_else(|| def.mcp_sources.first())
+    else {
+        return Err("该工具不支持 MCP 配置".into());
+    };
+    // 校验，避免写入损坏的配置
+    match src.format {
+        Format::Toml => {
+            toml::from_str::<toml::Value>(text).map_err(|e| format!("TOML 语法错误，已取消保存: {e}"))?;
+        }
+        _ => {
+            serde_json::from_str::<Value>(text).map_err(|e| format!("JSON 语法错误，已取消保存: {e}"))?;
+        }
+    }
+    let backup = store::backup_file(&src.path).unwrap_or(None);
+    // 版本库：受管工具写入前自动快照
+    let _ = crate::configvault::auto_snapshot(app, harness_id);
+    if let Some(parent) = src.path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&src.path, text).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "path": src.path.to_string_lossy(),
+        "backup": backup.map(|b| b.to_string_lossy().into_owned()),
+    }))
+}
+
 pub fn apply(app: &AppH, harness_id: &str, kind: &str, names: &[String]) -> ApplyResult {
     let mut res = ApplyResult {
         applied: vec![],
@@ -689,6 +1060,8 @@ pub fn apply(app: &AppH, harness_id: &str, kind: &str, names: &[String]) -> Appl
         backups: vec![],
         errors: vec![],
     };
+    // 版本库：受管工具写入前自动快照
+    let _ = crate::configvault::auto_snapshot(app, harness_id);
     let Some(def) = defs(app).into_iter().find(|d| d.id == harness_id) else {
         res.errors.push(format!("未知工具: {harness_id}"));
         return res;
@@ -716,11 +1089,20 @@ pub fn apply(app: &AppH, harness_id: &str, kind: &str, names: &[String]) -> Appl
             match src.format {
                 Format::JsonFlat | Format::JsonServers | Format::OpenCode => {
                     let mut root: Map<String, Value> = if path.exists() {
-                        std::fs::read_to_string(&path)
-                            .ok()
-                            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-                            .and_then(|v| v.as_object().cloned())
-                            .unwrap_or_default()
+                        let text = match std::fs::read_to_string(&path) {
+                            Ok(t) => t,
+                            Err(e) => {
+                                res.errors.push(e.to_string());
+                                return res;
+                            }
+                        };
+                        match serde_json::from_str::<Value>(&text) {
+                            Ok(v) => v.as_object().cloned().unwrap_or_default(),
+                            Err(e) => {
+                                res.errors.push(format!("配置文件解析失败（可能含注释），为避免清空已取消写回: {e}"));
+                                return res;
+                            }
+                        }
                     } else {
                         Map::new()
                     };
@@ -762,10 +1144,20 @@ pub fn apply(app: &AppH, harness_id: &str, kind: &str, names: &[String]) -> Appl
                 }
                 Format::Toml => {
                     let mut root: toml::Value = if path.exists() {
-                        std::fs::read_to_string(&path)
-                            .ok()
-                            .and_then(|t| toml::from_str(&t).ok())
-                            .unwrap_or_else(|| toml::Value::Table(Default::default()))
+                        let text = match std::fs::read_to_string(&path) {
+                            Ok(t) => t,
+                            Err(e) => {
+                                res.errors.push(e.to_string());
+                                return res;
+                            }
+                        };
+                        match toml::from_str(&text) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                res.errors.push(format!("配置文件解析失败，为避免清空已取消写回: {e}"));
+                                return res;
+                            }
+                        }
                     } else {
                         toml::Value::Table(Default::default())
                     };
@@ -784,25 +1176,36 @@ pub fn apply(app: &AppH, harness_id: &str, kind: &str, names: &[String]) -> Appl
                     }
                     let smap = servers.as_table_mut().unwrap();
                     for s in &selected {
-                        if s.transport != "stdio" {
-                            res.warnings
-                                .push(format!("Codex 暂不支持 {} 类型，已跳过: {}", s.transport, s.name));
-                            continue;
-                        }
                         let mut t = toml::value::Table::new();
-                        t.insert("command".into(), toml::Value::String(s.command.clone()));
-                        if !s.args.is_empty() {
-                            t.insert(
-                                "args".into(),
-                                toml::Value::Array(s.args.iter().map(|a| toml::Value::String(a.clone())).collect()),
-                            );
-                        }
-                        if !s.env.is_empty() {
-                            let mut env_t = toml::value::Table::new();
-                            for (k, v) in &s.env {
-                                env_t.insert(k.clone(), toml::Value::String(v.clone()));
+                        if s.transport == "stdio" {
+                            // stdio: command / args / env
+                            t.insert("command".into(), toml::Value::String(s.command.clone()));
+                            if !s.args.is_empty() {
+                                t.insert(
+                                    "args".into(),
+                                    toml::Value::Array(
+                                        s.args.iter().map(|a| toml::Value::String(a.clone())).collect(),
+                                    ),
+                                );
                             }
-                            t.insert("env".into(), toml::Value::Table(env_t));
+                            if !s.env.is_empty() {
+                                let mut env_t = toml::value::Table::new();
+                                for (k, v) in &s.env {
+                                    env_t.insert(k.clone(), toml::Value::String(v.clone()));
+                                }
+                                t.insert("env".into(), toml::Value::Table(env_t));
+                            }
+                        } else {
+                            // remote: Codex 用 url + http_headers（内联表）；Bearer token 优先转 bearer_token_env_var
+                            t.insert("url".into(), toml::Value::String(s.url.clone()));
+                            if !s.headers.is_empty() {
+                                let mut h_t = toml::value::Table::new();
+                                for (k, v) in &s.headers {
+                                    h_t.insert(k.clone(), toml::Value::String(v.clone()));
+                                }
+                                // 内联表：避免 TOML 子表与 Codex 期望的结构不符
+                                t.insert("http_headers".into(), toml::Value::Table(h_t));
+                            }
                         }
                         smap.insert(s.name.clone(), toml::Value::Table(t));
                         res.applied.push(s.name.clone());

@@ -71,7 +71,20 @@ pub fn list_mcp(app: &AppH) -> Result<Vec<McpServer>, String> {
         let entry = entry.map_err(es)?;
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("json") {
-            if let Ok(p) = store::read_json::<McpServer>(&path) {
+            if let Ok(mut p) = store::read_json::<McpServer>(&path) {
+                // 一次性迁移：从某工具收集来的 MCP 本就存在于该工具，补上来源工具作为应用目标，
+                // 并写回磁盘 + 置标志位，之后用户移除不再被重新加回。
+                if !p.targets_initialized {
+                    if p.targets.is_empty() {
+                        if let Some(o) = &p.origin {
+                            if !o.harness.is_empty() {
+                                p.targets = vec![o.harness.clone()];
+                            }
+                        }
+                    }
+                    p.targets_initialized = true;
+                    let _ = store::write_json(&path, &p);
+                }
                 out.push(p);
             }
         }

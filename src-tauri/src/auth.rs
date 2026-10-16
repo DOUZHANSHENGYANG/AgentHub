@@ -72,7 +72,7 @@ pub fn logout(app: &AppH) -> Result<(), String> {
     // 解绑 remote
     let root = crate::store::data_root(app);
     if root.join(".git").exists() {
-        let _ = std::process::Command::new("git")
+        let _ = crate::store::silent_command("git")
             .current_dir(&root)
             .args(["remote", "remove", "origin"])
             .output();

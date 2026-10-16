@@ -4,7 +4,6 @@
 use crate::skill_toml;
 use serde::Serialize;
 use std::path::Path;
-use std::process::Command;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,7 +55,7 @@ pub fn check(dir: &Path) -> Result<UpstreamReport, String> {
     }
 
     // git ls-remote <remote> HEAD
-    let out = Command::new("git")
+    let out = crate::store::silent_command("git")
         .args(["ls-remote", &remote, "HEAD"])
         .output();
     let Ok(out) = out else {

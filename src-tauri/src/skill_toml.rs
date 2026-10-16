@@ -412,6 +412,62 @@ pub fn pack(dir: &Path, out_dir: &Path) -> Result<std::path::PathBuf, String> {
 
     Ok(target)
 }
+/// 打包前的规范性检查（SSEP §7.1 分发约定）。
+/// 返回 (name, version, warnings)。硬性不合规直接 Err。
+pub fn check_pack_ready(dir: &Path) -> Result<(String, String, Vec<String>), String> {
+    let doc = load(dir).ok_or_else(|| {
+        "尚未接入 SKILL.toml 协议：请先生成协议档案（分发要求 CORE 完整）".to_string()
+    })?;
+    let mut warnings: Vec<String> = Vec::new();
+
+    // 1) [meta].name 必备
+    let name = get_str(&doc, "meta.name").unwrap_or_default();
+    if name.trim().is_empty() {
+        return Err("[meta].name 缺失，无法确定包名".into());
+    }
+
+    // 2) [meta].version 必须合法 semver（分发靠它定位版本）
+    let version = get_str(&doc, "meta.version").unwrap_or_default();
+    if version.is_empty() || !is_semver(&version) {
+        return Err(format!("[meta].version 不是合法 semver: {version:?}（分发需要可定位的版本号）"));
+    }
+    if version == "0.0.0" {
+        warnings.push("版本号为 0.0.0（未正式定版），建议先在「版本」页发布一个版本".into());
+    }
+
+    // 3) status：draft 不适合对外分发（SSEP §5 状态机）
+    let status = get_str(&doc, "meta.status").unwrap_or_default();
+    if status == "draft" {
+        warnings.push("状态为 draft（草稿）：SSEP 约定 draft 不对外分发，建议先设为 active".into());
+    } else if status == "deprecated" {
+        warnings.push("状态为 deprecated（已弃用）：仍可分发，但使用方应迁移到后继技能".into());
+    } else if status == "archived" {
+        warnings.push("状态为 archived（已归档）：通常不应再分发".into());
+    }
+
+    // 4) 正文必备
+    if !dir.join("SKILL.md").exists() {
+        return Err("缺少 SKILL.md".into());
+    }
+
+    // 5) 依赖声明自洽性（仅提示）
+    if let Some(arr) = doc.get("deps").and_then(|d| d.get("item")).and_then(|v| v.as_array()) {
+        for it in arr {
+            let dn = it.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            if dn.is_empty() {
+                warnings.push("存在未填写名称的依赖声明".into());
+                break;
+            }
+        }
+    }
+
+    // 6) 审查新鲜度（STALE 时包内 [vet] 已过期）
+    if is_stale(dir) {
+        warnings.push("内容在审查后已变更（STALE）：包内 [vet] 结论已过期，建议重新审查后再分发".into());
+    }
+
+    Ok((name, version, warnings))
+}
 fn es_io(e: std::io::Error) -> String {
     e.to_string()
 }

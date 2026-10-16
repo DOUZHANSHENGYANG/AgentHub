@@ -33,6 +33,8 @@ dirs = "6"
 toml = "0.8"
 sha2 = "0.10"
 ureq = { version = "2", features = ["json"] }
+serde_yaml_ng = "0.10.0"
+zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

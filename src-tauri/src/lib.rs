@@ -1,4 +1,5 @@
 mod commands;
+mod configvault;
 mod harness;
 mod items;
 mod models;
@@ -10,7 +11,9 @@ mod install;
 mod registry;
 mod upstream;
 mod skill_toml;
+mod skillhub;
 mod vet;
+mod toolmgr;
 
 use tauri::Manager;
 
@@ -24,6 +27,7 @@ pub fn run() {
             commands::get_settings,
             commands::set_data_dir,
             commands::set_prefs,
+            commands::set_harness_order,
             commands::add_skill_source_dir,
             commands::remove_skill_source_dir,
             commands::list_prompts,
@@ -37,10 +41,22 @@ pub fn run() {
             commands::read_skill,
             commands::save_skill,
             commands::import_skill_folder,
+            commands::import_skill_zip,
             commands::skill_extension,
             commands::set_skill_status,
             commands::pack_skill,
+commands::check_pack_ready,
+commands::pack_skills_batch,
             commands::vet_skill,
+commands::set_vet_review,
+commands::ignore_all_vet_findings,
+commands::review_vet_finding,
+commands::read_vet_report,
+commands::seed_skill_version,
+            commands::repair_skill_tags,
+commands::read_skill_file,
+commands::list_skill_files,
+commands::onboard_skills_batch,
             commands::install_skillpack,
             commands::parse_skill_index,
             commands::install_from_index,
@@ -60,10 +76,36 @@ pub fn run() {
             commands::cleanup_git_temp,
             commands::pre_import,
             commands::delete_skill,
+            commands::clear_skill_versions,
+            commands::skillhub_search,
+            commands::skillhub_categories,
+            commands::skillhub_install,
+            commands::ensure_skill_protocol,
+            commands::release_skill_version,
             commands::scan_harnesses,
             commands::import_from_harness,
             commands::apply_to_harness,
+            commands::remove_from_harness,
+            commands::read_harness_config,
+            commands::vault_status,
+            commands::vault_index,
+            commands::vault_installed_count,
+            commands::vault_set_watched,
+            commands::vault_set_daily,
+            commands::vault_snapshot,
+            commands::vault_maybe_daily,
+            commands::vault_read_version,
+            commands::vault_restore,
+            commands::vault_clear,
+            commands::write_harness_config,
+            commands::merge_harness_config,
+            commands::read_import_file,
             commands::reveal_path,
+            commands::open_path,
+            commands::open_skill_file,
+            commands::tool_list,
+            commands::tool_check_latest,
+            commands::tool_update,
             commands::storage_stats,
         ])
         .setup(|app| {
