@@ -20,7 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field, Input, Textarea } from "@/components/ui/input";
+import { Field, Input, Label, Textarea } from "@/components/ui/input";
 import { copyText } from "@/lib/api";
 import type { Prompt, PromptVariable } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -444,7 +444,8 @@ export function PromptsPage() {
 
       {/* editor */}
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
-        <DialogContent wide>
+        {/* 编辑器需要同时容纳「正文 + 变量 + 版本」三块，宽度与高度都要给足 */}
+        <DialogContent wide className="h-[92vh] max-h-[92vh] sm:max-w-[1100px]">
           <DialogHeader>
             <DialogTitle>{editing ? t("prompts.editTitle") : t("prompts.newTitle")}</DialogTitle>
           </DialogHeader>
@@ -455,32 +456,51 @@ export function PromptsPage() {
             }}
             className="flex min-h-0 flex-1 flex-col"
           >
-            <DialogBody className="flex flex-col gap-4">
-              <Field label={t("prompts.fieldTitle")}>
-                <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("prompts.titlePlaceholder")} autoFocus />
-              </Field>
-              <Field label={t("prompts.fieldDescription")}>
+            <DialogBody className="flex min-h-0 flex-1 flex-col gap-3">
+              {/* 元信息：两列并排，避免占掉正文的纵向空间 */}
+              <div className="grid shrink-0 gap-3 sm:grid-cols-2">
+                <Field label={t("prompts.fieldTitle")}>
+                  <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("prompts.titlePlaceholder")} autoFocus />
+                </Field>
+                <Field label={t("common.tags")} hint={t("common.tagPlaceholder")}>
+                  <TagInput value={tags} onChange={setTags} />
+                </Field>
+              </div>
+              <Field label={t("prompts.fieldDescription")} className="shrink-0">
                 <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t("prompts.descriptionPlaceholder")} />
               </Field>
-              <Field label={t("common.tags")} hint={t("common.tagPlaceholder")}>
-                <TagInput value={tags} onChange={setTags} />
-              </Field>
-              <Field label={t("prompts.fieldContent")} className="flex min-h-0 flex-1 flex-col">
-                <Textarea
-                  value={content}
-                  onChange={(e) => setContent(e.target.value)}
-                  placeholder={t("prompts.contentPlaceholder")}
-                  className="min-h-56 flex-1 font-mono text-[13px]"
-                />
-              </Field>
-              {/* 变量定义：正文里的 {{name}} 是唯一事实来源，这里只做元数据编辑 */}
-              <PromptVarsPanel
-                content={content}
-                variables={variables}
-                onChangeContent={setContent}
-                onChangeVariables={setVariables}
-              />
-              {editing ? <VersionList versions={editing.versions} onRestore={(c) => { setContent(c); toast.info(t("prompts.versionRestored")); }} /> : null}
+
+              {/* 主体：左正文（占满剩余高度） / 右侧栏（变量 + 版本，独立滚动） */}
+              <div className="flex min-h-0 flex-1 gap-3">
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1">
+                  <Label className="shrink-0">{t("prompts.fieldContent")}</Label>
+                  <Textarea
+                    value={content}
+                    onChange={(e) => setContent(e.target.value)}
+                    placeholder={t("prompts.contentPlaceholder")}
+                    className="min-h-0 flex-1 resize-none font-mono text-[13px]"
+                  />
+                </div>
+                <aside className="flex w-[340px] shrink-0 flex-col gap-2 overflow-y-auto pr-0.5">
+                  {/* 变量定义：正文里的 {{name}} 是唯一事实来源，这里只做元数据编辑 */}
+                  <PromptVarsPanel
+                    content={content}
+                    variables={variables}
+                    onChangeContent={setContent}
+                    onChangeVariables={setVariables}
+                  />
+                  {editing ? (
+                    <VersionList
+                      versions={editing.versions}
+                      current={content}
+                      onRestore={(c) => {
+                        setContent(c);
+                        toast.info(t("prompts.versionRestored"));
+                      }}
+                    />
+                  ) : null}
+                </aside>
+              </div>
             </DialogBody>
             <DialogFooter>
               <Button variant="secondary" onClick={() => setEditorOpen(false)}>
