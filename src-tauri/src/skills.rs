@@ -1660,6 +1660,33 @@ pub fn import_skill_dir(app: &AppH, src: &Path, overwrite: bool) -> Result<Strin
     import_skill_dir_as(app, src, overwrite, None)
 }
 
+/// 记录技能来源（从某个 harness 收集而来）。
+///
+/// 为什么必须单独写：`origin` 只存在于 `.hub.json`，而导入流程（文件夹 / ZIP /
+/// 市场 / Git）并不知道来源是哪个工具。原先只有读取方（list_skills）而没有写入方，
+/// 导致所有技能的 origin 恒为 None，界面上的「按来源筛选」计数全部落到本机一档，
+/// 与右侧实际列表对不上。
+pub fn set_skill_origin(app: &AppH, dir_name: &str, harness: &str, file: &str) -> Result<(), String> {
+    let dir = skills_root(app).join(dir_name);
+    if !dir.is_dir() {
+        return Err(format!("技能不存在: {dir_name}"));
+    }
+    write_skill_origin(&dir, harness, file)
+}
+
+/// 纯路径版本，便于单元测试（不依赖 AppHandle）。
+/// 保留 `.hub.json` 里已有的 tags / versions / vet_report，只替换 origin。
+fn write_skill_origin(dir: &Path, harness: &str, file: &str) -> Result<(), String> {
+    let hp = hub_path(dir);
+    let mut hub: SkillHub = store::read_json(&hp).unwrap_or_default();
+    hub.origin = Some(Origin {
+        harness: harness.to_string(),
+        file: file.to_string(),
+        imported_at: now_iso(),
+    });
+    store::write_json(&hp, &hub)
+}
+
 /// 判断目录名是否为本工具自己生成的临时解压目录名。
 /// 这种名字绝不能被当成技能目录名落盘（否则会出现 `agenthub-zip-1234-20261017010203` 这样的技能）。
 fn is_generated_tmp_name(folder: &str) -> bool {
@@ -2114,6 +2141,68 @@ mod file_access_tests {
         assert_eq!(file_kind("xlsx"), "sheet");
         assert_eq!(file_kind("zip"), "archive");
         assert_eq!(file_kind("weird"), "other");
+    }
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::*;
+
+    fn tmp_skill(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("ah-origin-{tag}-{}", crate::models::new_id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("SKILL.md"), "---
+name: x
+---
+body").unwrap();
+        d
+    }
+
+    #[test]
+    fn records_origin_harness() {
+        let d = tmp_skill("rec");
+        write_skill_origin(&d, "claude-code", "C:/x/.claude/skills").unwrap();
+        let hub: SkillHub = store::read_json(&hub_path(&d)).unwrap();
+        let o = hub.origin.expect("应写入 origin");
+        assert_eq!(o.harness, "claude-code");
+        assert_eq!(o.file, "C:/x/.claude/skills");
+        assert!(!o.imported_at.is_empty(), "应记录导入时间");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// 关键：不能覆盖掉 .hub.json 里已有的 tags / versions / vet_report
+    #[test]
+    fn keeps_existing_hub_fields() {
+        let d = tmp_skill("keep");
+        let hp = hub_path(&d);
+        let mut hub = SkillHub::default();
+        hub.tags = vec!["设计".into(), "UI".into()];
+        hub.versions = vec![crate::models::VersionEntry {
+            v: 1,
+            saved_at: "2026-10-17T00:00:00Z".into(),
+            note: "初版".into(),
+            content: "body".into(),
+        }];
+        store::write_json(&hp, &hub).unwrap();
+
+        write_skill_origin(&d, "opencode", "C:/x/skills").unwrap();
+
+        let after: SkillHub = store::read_json(&hp).unwrap();
+        assert_eq!(after.tags, vec!["设计", "UI"], "tags 不能被清掉");
+        assert_eq!(after.versions.len(), 1, "版本历史不能被清掉");
+        assert_eq!(after.origin.unwrap().harness, "opencode");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// 覆盖收集：第二次收集应更新来源，而不是保留旧值
+    #[test]
+    fn overwrites_previous_origin() {
+        let d = tmp_skill("over");
+        write_skill_origin(&d, "claude-code", "C:/a").unwrap();
+        write_skill_origin(&d, "pi-agent", "C:/b").unwrap();
+        let hub: SkillHub = store::read_json(&hub_path(&d)).unwrap();
+        assert_eq!(hub.origin.unwrap().harness, "pi-agent");
+        std::fs::remove_dir_all(&d).ok();
     }
 }
 

@@ -684,7 +684,21 @@ pub fn import(app: &AppH, harness_id: &str, kind: &str, selections: &[ImportSele
                     continue;
                 };
                 match skills::import_skill_dir(app, &src, sel.overwrite) {
-                    Ok(_) => res.imported.push(sel.name.clone()),
+                    Ok(dir_name) => {
+                        // 记录来源：否则界面的「按来源筛选」计数会全部落到本机一档
+                        let origin_file = def
+                            .skills_dirs
+                            .iter()
+                            .map(|d| d.to_string_lossy().into_owned())
+                            .collect::<Vec<_>>()
+                            .join(" · ");
+                        if let Err(e) = skills::set_skill_origin(app, &dir_name, harness_id, &origin_file) {
+                            // ImportResult 没有 warnings 字段；来源记录失败不阻断导入，
+                            // 但要留痕，否则又会出现「计数对不上却查不到原因」
+                            res.errors.push(format!("{}: 已导入但来源记录失败（{e}）", sel.name));
+                        }
+                        res.imported.push(sel.name.clone())
+                    }
                     Err(_) if !sel.overwrite => res.skipped.push(sel.name.clone()),
                     Err(e) => res.errors.push(format!("{}: {e}", sel.name)),
                 }
