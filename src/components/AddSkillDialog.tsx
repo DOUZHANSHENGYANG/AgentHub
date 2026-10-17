@@ -36,7 +36,7 @@ import { Field, Input, Textarea } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/motion/switch";
 import { api } from "@/lib/api";
-import type { MarketCategory, MarketSkill } from "@/lib/types";
+import type { ImportPreview, MarketCategory, MarketSkill } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /** 三种添加方式；`create` 默认选中（自己新建，零依赖） */
@@ -103,6 +103,11 @@ export function AddSkillDialog({ onDone }: { onDone: () => void }) {
   const [gitFilter, setGitFilter] = useState("");
   const [fetching, setFetching] = useState(false);
   const [gitTemp, setGitTemp] = useState("");
+  /** 当前预览的候选目录路径（点击候选行时设置） */
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewErr, setPreviewErr] = useState("");
 
   const reset = () => {
     setMode("create");
@@ -128,6 +133,9 @@ export function AddSkillDialog({ onDone }: { onDone: () => void }) {
     setGitSel(new Set());
     setGitFilter("");
     setGitTemp("");
+    setPreviewPath(null);
+    setPreview(null);
+    setPreviewErr("");
   };
 
   const close = () => {
@@ -328,6 +336,21 @@ export function AddSkillDialog({ onDone }: { onDone: () => void }) {
       if (ok > 0) close();
     } finally {
       setBusy(false);
+    }
+  };
+
+  /** 点候选行 → 拉取该目录的预览。失败只提示，不影响选择。 */
+  const loadPreview = async (path: string) => {
+    setPreviewPath(path);
+    setPreviewLoading(true);
+    setPreviewErr("");
+    try {
+      setPreview(await api.previewSkillDir(path));
+    } catch (e) {
+      setPreview(null);
+      setPreviewErr(String(e));
+    } finally {
+      setPreviewLoading(false);
     }
   };
 
@@ -824,14 +847,21 @@ export function AddSkillDialog({ onDone }: { onDone: () => void }) {
                           {t("skills.gitClearSel")}
                         </Button>
                       </div>
-                      <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
+                      {/* 左：候选列表 / 右：内容预览 —— 导入前先看清是什么 */}
+                      <div className="flex min-h-0 flex-1 gap-3">
+                      <div className="flex min-h-0 w-[300px] shrink-0 flex-col gap-1 overflow-y-auto pr-1">
                         {filteredDiscovered.map((d) => {
                           const checked = gitSel.has(d.path);
+                          const active = previewPath === d.path;
                           return (
                             <button
                               key={d.path}
                               type="button"
-                              onClick={() =>
+                              onClick={() => {
+                                // 单击预览，勾选框单独管选择
+                                void loadPreview(d.path);
+                              }}
+                              onDoubleClick={() =>
                                 setGitSel((prev) => {
                                   const next = new Set(prev);
                                   if (next.has(d.path)) next.delete(d.path);
@@ -840,13 +870,41 @@ export function AddSkillDialog({ onDone }: { onDone: () => void }) {
                                 })
                               }
                               className={cn(
-                                "flex items-start gap-2.5 rounded-lg border px-3 py-2 text-left outline-none transition-colors",
-                                checked ? "border-primary/40 bg-primary-soft" : "border-transparent hover:bg-surface-2",
+                                "flex items-start gap-2.5 rounded-lg border px-2.5 py-2 text-left outline-none transition-colors",
+                                active
+                                  ? "border-primary bg-primary-soft"
+                                  : checked
+                                    ? "border-primary/40 bg-primary-soft/50"
+                                    : "border-transparent hover:bg-surface-2",
                               )}
                             >
                               <span
+                                role="checkbox"
+                                aria-checked={checked}
+                                tabIndex={0}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setGitSel((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(d.path)) next.delete(d.path);
+                                    else next.add(d.path);
+                                    return next;
+                                  });
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === " " || e.key === "Enter") {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    setGitSel((prev) => {
+                                      const next = new Set(prev);
+                                      if (next.has(d.path)) next.delete(d.path);
+                                      else next.add(d.path);
+                                      return next;
+                                    });
+                                  }
+                                }}
                                 className={cn(
-                                  "mt-0.5 grid size-4 shrink-0 place-items-center rounded border",
+                                  "mt-0.5 grid size-4 shrink-0 cursor-pointer place-items-center rounded border",
                                   checked ? "border-primary bg-primary text-white" : "border-border-strong",
                                 )}
                               >
@@ -862,6 +920,53 @@ export function AddSkillDialog({ onDone }: { onDone: () => void }) {
                         {filteredDiscovered.length === 0 ? (
                           <p className="px-3 py-4 text-center text-[11px] text-ink-3">{t("skills.gitFilterEmpty")}</p>
                         ) : null}
+                      </div>
+
+                      {/* 右：预览 */}
+                      <div className="flex min-h-0 min-w-0 flex-1 flex-col rounded-lg border border-border bg-bg-subtle">
+                        {previewLoading ? (
+                          <div className="flex flex-1 items-center justify-center gap-2 text-[11px] text-ink-3">
+                            <Loader2 className="size-3.5 animate-spin" />
+                            {t("common.loading")}
+                          </div>
+                        ) : previewErr ? (
+                          <div className="flex flex-1 items-center justify-center px-4 text-center text-[11px] text-danger">
+                            {previewErr}
+                          </div>
+                        ) : !preview ? (
+                          <div className="flex flex-1 items-center justify-center px-4 text-center text-[11px] text-ink-3">
+                            {t("skills.previewHint")}
+                          </div>
+                        ) : (
+                          <>
+                            <div className="shrink-0 border-b border-border px-3 py-2">
+                              <div className="flex items-center gap-2">
+                                <span className="min-w-0 flex-1 truncate font-mono text-[13px] font-medium text-foreground">
+                                  {preview.name}
+                                </span>
+                                {preview.existsInHub ? (
+                                  <Badge variant="warning">{t("skills.previewInHub")}</Badge>
+                                ) : null}
+                              </div>
+                              {preview.description ? (
+                                <p className="mt-0.5 line-clamp-2 text-[11px] leading-relaxed text-ink-3">
+                                  {preview.description}
+                                </p>
+                              ) : null}
+                            </div>
+                            <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2.5">
+                              {preview.body.trim() ? (
+                                <Markdown source={preview.body} />
+                              ) : (
+                                <p className="text-[11px] text-ink-3">{t("skills.previewEmptyBody")}</p>
+                              )}
+                            </div>
+                            <div className="shrink-0 border-t border-border px-3 py-1.5 text-[10px] text-ink-3">
+                              {t("skills.previewFiles", { n: preview.files.length })}
+                            </div>
+                          </>
+                        )}
+                      </div>
                       </div>
                       <Button className="shrink-0" onClick={() => void installDiscovered()} disabled={busy || gitSel.size === 0}>
                         {busy ? <Loader2 className="animate-spin" /> : null}

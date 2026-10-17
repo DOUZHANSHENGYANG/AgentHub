@@ -1,8 +1,9 @@
 use crate::models::*;
 use crate::store::{self, AppH, es};
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Frontmatter 值：只保留三种语义（字符串 / 字符串列表 / 嵌套结构）。
 /// 解析交给 serde_yaml_ng，这里只做「归一化」，不再手写 YAML 子集解析。
@@ -1075,6 +1076,103 @@ fn file_kind(ext: &str) -> &'static str {
 
 /// 技能目录树（用于「文件」页签展示结构）。
 /// 跳过内部文件：.hub.json、*.agenthub-*。
+/// 预览一个「尚未导入」的技能目录：返回 SKILL.md 正文 + 文件清单 + 是否已在中枢。
+///
+/// 用于导入前确认内容（从文件夹 / ZIP / Git 选中候选时）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPreview {
+    pub name: String,
+    pub description: String,
+    /// SKILL.md 正文（已剥离 frontmatter）
+    pub body: String,
+    /// frontmatter 原文
+    pub frontmatter: String,
+    /// 文件清单（相对路径 + 字节数），最多 200 条
+    pub files: Vec<PreviewFile>,
+    /// 中枢里是否已有同名技能（同名导入会走覆盖流程）
+    pub exists_in_hub: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewFile {
+    pub path: String,
+    pub size: u64,
+}
+
+/// 收集文件清单（跳过 .git 与内部 sidecar），上限 200 条避免超大目录拖垮界面
+fn collect_preview_files(root: &Path) -> Vec<PreviewFile> {
+    fn walk(cur: &Path, rel: &str, out: &mut Vec<PreviewFile>) {
+        if out.len() >= 200 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(cur) else {
+            return;
+        };
+        let mut items: Vec<_> = entries.flatten().collect();
+        items.sort_by_key(|e| e.file_name());
+        for e in items {
+            if out.len() >= 200 {
+                return;
+            }
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name == ".git" || name == ".hub.json" || name.starts_with(".agenthub-") {
+                continue;
+            }
+            let p = e.path();
+            let child = if rel.is_empty() {
+                name.clone()
+            } else {
+                format!("{rel}/{name}")
+            };
+            match e.metadata() {
+                Ok(md) if md.is_dir() => walk(&p, &child, out),
+                Ok(md) => out.push(PreviewFile {
+                    path: child,
+                    size: md.len(),
+                }),
+                Err(_) => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, "", &mut out);
+    out
+}
+
+/// 预览导入候选。`path` 指向含 SKILL.md 的技能目录。
+pub fn preview_skill_dir(app: &AppH, path: &str) -> Result<ImportPreview, String> {
+    let dir = PathBuf::from(path);
+    if !dir.is_dir() {
+        return Err(format!("目录不存在: {path}"));
+    }
+    let doc = dir.join("SKILL.md");
+    if !doc.is_file() {
+        return Err("该目录没有 SKILL.md，不是技能目录".into());
+    }
+    let text = std::fs::read_to_string(&doc).map_err(es)?;
+    let (fm, body) = split_doc(&text);
+    let fm_text = compose_doc(&fm, "");
+    let name = {
+        let n = fm_get_str(&fm, "name");
+        if n.is_empty() {
+            dir.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default()
+        } else {
+            n
+        }
+    };
+    let exists_in_hub = skills_root(app).join(&name).is_dir();
+    Ok(ImportPreview {
+        name,
+        description: fm_get_str(&fm, "description"),
+        body: body.to_string(),
+        frontmatter: fm_text,
+        files: collect_preview_files(&dir),
+        exists_in_hub,
+    })
+}
+
 pub fn list_skill_files(app: &AppH, dir_name: &str) -> Result<crate::models::SkillFileNode, String> {
     use crate::models::SkillFileNode;
 
@@ -2141,6 +2239,37 @@ mod file_access_tests {
         assert_eq!(file_kind("xlsx"), "sheet");
         assert_eq!(file_kind("zip"), "archive");
         assert_eq!(file_kind("weird"), "other");
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn collects_files_but_skips_internal() {
+        let d = std::env::temp_dir().join(format!("ah-preview-{}", crate::models::new_id()));
+        std::fs::create_dir_all(d.join("references")).unwrap();
+        std::fs::write(d.join("SKILL.md"), "x").unwrap();
+        std::fs::write(d.join("references/a.md"), "y").unwrap();
+        std::fs::write(d.join(".hub.json"), "{}").unwrap();
+        let files = collect_preview_files(&d);
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert!(paths.contains(&"SKILL.md"));
+        assert!(paths.contains(&"references/a.md"), "子目录应递归收集");
+        assert!(!paths.iter().any(|p| p.contains(".hub.json")), "内部 sidecar 不应出现");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn cap_at_200_files() {
+        let d = std::env::temp_dir().join(format!("ah-preview-cap-{}", crate::models::new_id()));
+        std::fs::create_dir_all(&d).unwrap();
+        for i in 0..260 {
+            std::fs::write(d.join(format!("f{i}.txt")), "x").unwrap();
+        }
+        assert_eq!(collect_preview_files(&d).len(), 200, "应有上限");
+        std::fs::remove_dir_all(&d).ok();
     }
 }
 

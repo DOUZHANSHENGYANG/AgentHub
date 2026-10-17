@@ -743,6 +743,12 @@ pub fn auth_create_repo(app: AppH, provider: String) -> Result<String, String> {
     crate::auth::create_backup_repo(&app, &provider)
 }
 
+/// 预览尚未导入的技能目录：正文 + 文件清单 + 是否已在中枢
+#[tauri::command]
+pub fn preview_skill_dir(app: AppH, path: String) -> Result<crate::skills::ImportPreview, String> {
+    crate::skills::preview_skill_dir(&app, &path)
+}
+
 #[tauri::command]
 pub fn read_import_file(path: String) -> Result<std::collections::HashMap<String, String>, String> {
     let p = std::path::Path::new(&path);

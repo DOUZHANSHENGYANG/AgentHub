@@ -364,3 +364,16 @@ export interface ToolUpdateOutcome {
   to: string;
   message: string;
 }
+
+/** 导入前的技能预览（尚未进中枢） */
+export interface ImportPreview {
+  name: string;
+  description: string;
+  /** SKILL.md 正文（已剥离 frontmatter） */
+  body: string;
+  /** frontmatter 原文 */
+  frontmatter: string;
+  files: { path: string; size: number }[];
+  /** 中枢里已有同名技能 */
+  existsInHub: boolean;
+}
