@@ -12,15 +12,46 @@ export interface Origin {
   importedAt: string;
 }
 
+/** 提示词变量类型：渲染时只影响控件与空值判定 */
+export type PromptVarType = "text" | "textarea" | "select" | "number" | "boolean";
+
+/** 一个变量的定义（正文里以 {{name}} 引用） */
+export interface PromptVariable {
+  name: string;
+  type: PromptVarType;
+  defaultValue: string;
+  options: string[];
+  required: boolean;
+  placeholder: string;
+  description: string;
+}
+
 export interface Prompt {
   id: string;
   title: string;
   description: string;
   content: string;
   tags: string[];
+  /** 变量定义。旧数据没有该字段时为 undefined，按空数组处理 */
+  variables?: PromptVariable[];
   versions: VersionEntry[];
   createdAt: string;
   updatedAt: string;
+}
+
+/** 正文解析对账结果 */
+export interface PromptVarReconciled {
+  /** 正文中出现的变量（已合并定义） */
+  active: PromptVariable[];
+  /** 只在定义里、正文已不引用 */
+  unused: PromptVariable[];
+}
+
+/** 渲染结果 */
+export interface PromptVarRendered {
+  content: string;
+  /** 必填但未给值的变量名 */
+  missing: string[];
 }
 
 export interface McpServer {

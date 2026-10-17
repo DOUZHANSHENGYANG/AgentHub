@@ -638,6 +638,55 @@ pub async fn sync_pull(app: AppH, authed: bool, provider: String) -> Result<Stri
         .map_err(|e| format!("任务失败: {e}"))?
 }
 
+// ---------------- 提示词变量 ----------------
+
+/// 解析正文里的占位符：返回变量清单（已合并定义）、未使用定义、未闭合诊断。
+/// `forEditor = true` 时会为正文里尚未定义的占位符补建默认定义。
+#[tauri::command]
+pub fn parse_prompt_vars(
+    content: String,
+    defined: Vec<crate::prompt_vars::PromptVariable>,
+    for_editor: bool,
+) -> crate::prompt_vars::Reconciled {
+    if for_editor {
+        crate::prompt_vars::reconcile_for_editor(&content, &defined)
+    } else {
+        crate::prompt_vars::reconcile(&content, &defined)
+    }
+}
+
+/// 用给定值填充占位符。`missing` 非空时由界面决定是否拦截（后端不擅自阻断）。
+#[tauri::command]
+pub fn render_prompt_vars(
+    content: String,
+    defined: Vec<crate::prompt_vars::PromptVariable>,
+    values: std::collections::BTreeMap<String, String>,
+) -> crate::prompt_vars::Rendered {
+    crate::prompt_vars::render(&content, &defined, &values)
+}
+
+/// 重命名变量：只改写占位符，不动正文其它同名文本。
+#[tauri::command]
+pub fn rename_prompt_var(content: String, from: String, to: String) -> String {
+    crate::prompt_vars::rename_variable(&content, &from, &to)
+}
+
+/// 删除变量的所有占位符。
+#[tauri::command]
+pub fn remove_prompt_var(content: String, name: String) -> String {
+    crate::prompt_vars::remove_variable(&content, &name)
+}
+
+/// 变量名校验：返回 None 表示合法，否则返回错误码（required / invalid / duplicate）。
+#[tauri::command]
+pub fn validate_prompt_var_name(
+    name: String,
+    defined: Vec<crate::prompt_vars::PromptVariable>,
+    current: Option<String>,
+) -> Option<String> {
+    crate::prompt_vars::validate_name(&name, &defined, current.as_deref()).map(|s| s.to_string())
+}
+
 // ---------------- AI 工具版本管理 ----------------
 
 #[tauri::command]

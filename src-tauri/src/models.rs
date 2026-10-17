@@ -39,6 +39,10 @@ pub struct Prompt {
     pub content: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// 变量定义（正文里 {{name}} 的元数据）。旧文件没有这个字段 → 空数组，
+    /// 正文无占位符时行为与之前完全一致。
+    #[serde(default)]
+    pub variables: Vec<crate::prompt_vars::PromptVariable>,
     #[serde(default)]
     pub versions: Vec<VersionEntry>,
     pub created_at: String,

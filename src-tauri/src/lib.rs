@@ -14,6 +14,7 @@ mod skill_toml;
 mod skillhub;
 mod vet;
 mod toolmgr;
+mod prompt_vars;
 
 use tauri::Manager;
 
@@ -103,6 +104,11 @@ commands::onboard_skills_batch,
             commands::reveal_path,
             commands::open_path,
             commands::open_skill_file,
+            commands::parse_prompt_vars,
+            commands::render_prompt_vars,
+            commands::rename_prompt_var,
+            commands::remove_prompt_var,
+            commands::validate_prompt_var_name,
             commands::tool_list,
             commands::tool_check_latest,
             commands::tool_update,

@@ -13,6 +13,9 @@ import type {
   SkillMeta,
   SkillSavePayload,
   StorageStats,
+  PromptVariable,
+  PromptVarReconciled,
+  PromptVarRendered,
   ToolList,
   ToolUpdateOutcome,
   VaultIndex,
@@ -214,6 +217,17 @@ export const api = {
   openSkillFile: (dirName: string, relPath: string) => invoke<void>("open_skill_file", { dirName, relPath }),
   revealPath: (path: string) => invoke<void>("reveal_path", { path }),
   storageStats: () => invoke<StorageStats>("storage_stats"),
+
+  // ── 提示词变量 ──
+  parsePromptVars: (content: string, defined: PromptVariable[], forEditor: boolean) =>
+    invoke<PromptVarReconciled>("parse_prompt_vars", { content, defined, forEditor }),
+  renderPromptVars: (content: string, defined: PromptVariable[], values: Record<string, string>) =>
+    invoke<PromptVarRendered>("render_prompt_vars", { content, defined, values }),
+  renamePromptVar: (content: string, from: string, to: string) =>
+    invoke<string>("rename_prompt_var", { content, from, to }),
+  removePromptVar: (content: string, name: string) => invoke<string>("remove_prompt_var", { content, name }),
+  validatePromptVarName: (name: string, defined: PromptVariable[], current?: string) =>
+    invoke<string | null>("validate_prompt_var_name", { name, defined, current: current ?? null }),
 
   // ── AI 工具版本管理 ──
   toolList: () => invoke<ToolList>("tool_list"),

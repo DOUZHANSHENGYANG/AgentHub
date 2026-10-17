@@ -1,4 +1,4 @@
-import { Copy, FileText, History, LayoutGrid, Plus, Rows3, Search, Trash2 } from "lucide-react";
+import { Copy, FileText, History, LayoutGrid, Plus, Rows3, Search, Trash2, Wand2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -6,6 +6,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EmptyState } from "@/components/EmptyState";
 import { matchTags, TagFilter, type TagMode } from "@/components/TagFilter";
 import { PageShell } from "@/components/PageShell";
+import { PromptFillDialog, PromptVarsPanel } from "@/components/PromptVars";
 import { TagInput } from "@/components/TagInput";
 import { Markdown } from "@/components/Markdown";
 import { VersionList } from "@/components/VersionList";
@@ -21,7 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { Field, Input, Textarea } from "@/components/ui/input";
 import { copyText } from "@/lib/api";
-import type { Prompt } from "@/lib/types";
+import type { Prompt, PromptVariable } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useData } from "@/stores/data";
 
@@ -32,6 +33,17 @@ function fmt(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+/** 正文里是否有占位符 —— 只做轻量判定，真正解析交给后端 */
+function hasVars(p: Prompt): boolean {
+  // 用 indexOf 而非正则：避免多层转义出错，语义同样清楚
+  const open = p.content.indexOf('{{');
+  if (open < 0) return false;
+  const close = p.content.indexOf('}}', open + 2);
+  if (close < 0) return false;
+  const name = p.content.slice(open + 2, close).trim();
+  return name.length > 0 && !name.includes('{');
 }
 
 export function PromptsPage() {
@@ -52,6 +64,9 @@ export function PromptsPage() {
   const [description, setDescription] = useState("");
   const [content, setContent] = useState("");
   const [tags, setTags] = useState<string[]>([]);
+  const [variables, setVariables] = useState<PromptVariable[]>([]);
+  /** 正在填充的提示词（非 null 时弹框打开） */
+  const [filling, setFilling] = useState<Prompt | null>(null);
 
   const allTags = useMemo(() => {
     const set = new Set<string>();
@@ -87,6 +102,7 @@ export function PromptsPage() {
     setDescription("");
     setContent("");
     setTags([]);
+    setVariables([]);
     setEditorOpen(true);
   };
 
@@ -100,6 +116,7 @@ export function PromptsPage() {
     setDescription(p.description);
     setContent(p.content);
     setTags(p.tags);
+    setVariables(p.variables ?? []);
     setEditorOpen(true);
   };
 
@@ -111,6 +128,7 @@ export function PromptsPage() {
       description: description.trim(),
       content,
       tags,
+      variables,
       versions: editing?.versions ?? [],
       createdAt: editing?.createdAt ?? "",
       updatedAt: editing?.updatedAt ?? "",
@@ -361,6 +379,20 @@ export function PromptsPage() {
               <div className="flex items-start justify-between gap-2">
                 <h3 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">{p.title}</h3>
                 <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                  {/* 只有正文里真有占位符时才出现「填充」，否则这个按钮点进去是空的 */}
+                  {hasVars(p) ? (
+                    <Button
+                      size="iconSm"
+                      variant="ghost"
+                      title={t("prompts.fillAction")}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFilling(p);
+                      }}
+                    >
+                      <Wand2 />
+                    </Button>
+                  ) : null}
                   <Button
                     size="iconSm"
                     variant="ghost"
@@ -441,6 +473,13 @@ export function PromptsPage() {
                   className="min-h-56 flex-1 font-mono text-[13px]"
                 />
               </Field>
+              {/* 变量定义：正文里的 {{name}} 是唯一事实来源，这里只做元数据编辑 */}
+              <PromptVarsPanel
+                content={content}
+                variables={variables}
+                onChangeContent={setContent}
+                onChangeVariables={setVariables}
+              />
               {editing ? <VersionList versions={editing.versions} onRestore={(c) => { setContent(c); toast.info(t("prompts.versionRestored")); }} /> : null}
             </DialogBody>
             <DialogFooter>
@@ -454,6 +493,8 @@ export function PromptsPage() {
           </form>
         </DialogContent>
       </Dialog>
+
+      <PromptFillDialog prompt={filling} open={!!filling} onOpenChange={(v) => !v && setFilling(null)} />
 
       <ConfirmDialog
         open={!!deleting}
