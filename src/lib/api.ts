@@ -13,6 +13,7 @@ import type {
   SkillMeta,
   SkillSavePayload,
   StorageStats,
+  ImportPreview,
   PromptVariable,
   PromptVarReconciled,
   PromptVarRendered,
@@ -177,6 +178,8 @@ export const api = {
     invoke<{ path: string; backup: string | null }>("write_harness_config", { harness, text }),
   mergeHarnessConfig: (harness: string, text: string, json: string) =>
     invoke<string>("merge_harness_config", { harness, text, json }),
+  /** 预览尚未导入的技能目录 */
+  previewSkillDir: (path: string) => invoke<ImportPreview>("preview_skill_dir", { path }),
   readImportFile: (path: string) => invoke<{ name: string; text: string }>("read_import_file", { path }),
 
   // 配置版本库
@@ -234,6 +237,20 @@ export const api = {
   toolCheckLatest: () => invoke<ToolList>("tool_check_latest"),
   toolUpdate: (ids: string[]) => invoke<ToolUpdateOutcome[]>("tool_update", { ids }),
 };
+
+/** 读取剪贴板文本。失败返回 null（而不是空串），便于区分「空」与「读不到」。 */
+export async function pasteText(): Promise<string | null> {
+  try {
+    const { readText } = await import("@tauri-apps/plugin-clipboard-manager");
+    return await readText();
+  } catch {
+    try {
+      return await navigator.clipboard.readText();
+    } catch {
+      return null;
+    }
+  }
+}
 
 export async function copyText(text: string): Promise<boolean> {
   try {

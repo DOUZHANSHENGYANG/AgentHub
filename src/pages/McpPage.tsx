@@ -1,4 +1,4 @@
-import { Check, Copy, FolderOpen, ListChecks, Plus, ScanSearch, Search, Server, Trash2, Wrench } from "lucide-react";
+import { Braces, Check, ClipboardPaste, Copy, FolderOpen, ListChecks, Plus, ScanSearch, Search, Server, Trash2, Wrench } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -22,7 +22,8 @@ import {
 } from "@/components/ui/dialog";
 import { Field, Input, Textarea } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { api, copyText } from "@/lib/api";
+import { api, copyText, pasteText } from "@/lib/api";
+import { parseMcpConfig } from "@/lib/mcpParse";
 import { sortByOrder } from "@/lib/harnessOrder";
 import type { HarnessReport, McpServer } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -151,27 +152,117 @@ export function McpPage() {
     setUrl(s.url);
     setHeaderRows(rowsFromRecord(s.headers));
     setTags(s.tags);
+    // 编辑态也预填 JSON：切过去就能直接改，而不是面对一个空框
+    setNewMode("manual");
+    setImportJsonText(JSON.stringify(entryFor(s), null, 2));
     setEditorOpen(true);
   };
 
+  /** 单个服务的 MCP 条目形态（不含外层 mcpServers 包裹，便于直接编辑） */
+  function entryFor(s: McpServer): Record<string, unknown> {
+    const base: Record<string, unknown> =
+      s.transport === "stdio"
+        ? {
+            command: s.command,
+            ...(s.args.length ? { args: s.args } : {}),
+            ...(Object.keys(s.env).length ? { env: s.env } : {}),
+          }
+        : {
+            type: s.transport,
+            url: s.url,
+            ...(Object.keys(s.headers).length ? { headers: s.headers } : {}),
+          };
+    return base;
+  }
+
+  /** 从剪贴板读 JSON 填入编辑器 */
+  const pasteFromClipboard = async () => {
+    const text = await pasteText();
+    if (text === null) {
+      toast.error(t("mcp.pasteFailed"));
+      return;
+    }
+    if (!text.trim()) {
+      toast.warning(t("mcp.pasteEmpty"));
+      return;
+    }
+    setImportJsonText(text.trim());
+    toast.success(t("mcp.pasted"));
+  };
+
+  /** 格式化当前 JSON（解析失败只提示，不改内容） */
+  const formatJson = async () => {
+    try {
+      const parsed = JSON.parse(importJsonText) as unknown;
+      setImportJsonText(JSON.stringify(parsed, null, 2));
+    } catch {
+      toast.error(t("mcp.jsonBad"));
+    }
+  };
+
   const handleSave = async () => {
-    if (!name.trim()) return;
     if (!editing) return;
+
+    // 两种编辑方式各自生效，互不覆盖：
+    //   表单模式 → 用表单状态（transport/command/args/env/url/headers）
+    //   JSON 模式 → 以 JSON 为准（用户在这里改的内容必须真正写进去）
+    let fields: Partial<McpServer>;
+    if (newMode === "json") {
+      try {
+        fields = parseEntryJson(importJsonText);
+      } catch (e) {
+        toast.error(`${t("mcp.jsonBad")}: ${String(e)}`);
+        return;
+      }
+    } else {
+      fields = {
+        transport,
+        command: transport === "stdio" ? command.trim() : "",
+        args: transport === "stdio" ? argsText.split(String.fromCharCode(10)).map((x) => x.trim()).filter(Boolean) : [],
+        env: transport === "stdio" ? recordFromRows(envRows) : {},
+        url: transport !== "stdio" ? url.trim() : "",
+        headers: transport !== "stdio" ? recordFromRows(headerRows) : {},
+      };
+    }
+
+    const finalName = fields.name?.trim() || name.trim();
+    if (!finalName) {
+      toast.error(t("mcp.nameRequired"));
+      return;
+    }
+
     await saveMcp({
       ...editing,
-      name: name.trim(),
+      ...fields,
+      name: finalName,
       description: description.trim(),
-      transport,
-      command: transport === "stdio" ? command.trim() : "",
-      args: transport === "stdio" ? argsText.split("\n").map((x) => x.trim()).filter(Boolean) : [],
-      env: transport === "stdio" ? recordFromRows(envRows) : {},
-      url: transport !== "stdio" ? url.trim() : "",
-      headers: transport !== "stdio" ? recordFromRows(headerRows) : {},
       tags,
     });
     toast.success(t("mcp.saved"));
     setEditorOpen(false);
   };
+
+  /**
+   * 解析单个服务的 JSON。复用统一的 parseMcpConfig：
+   * 外层包裹（mcpServers / servers / mcp）与无包裹形态都由它处理，
+   * 这里只取第一个条目 —— 本弹框用于「编辑单个服务」。
+   */
+  function parseEntryJson(text: string): Partial<McpServer> {
+    const r = parseMcpConfig(text, name.trim() || "edited");
+    if (!r.entries.length) {
+      throw new Error(t("mcp.jsonNoEntry"));
+    }
+    const e = r.entries[0];
+    return {
+      name: e.name,
+      transport: e.transport,
+      command: e.command,
+      args: e.args,
+      env: e.env,
+      url: e.url,
+      headers: e.headers,
+    };
+  }
 
 
 
@@ -214,51 +305,38 @@ export function McpPage() {
   };
 
   const handleImportJson = async () => {
+    let parsed;
     try {
-      const parsed = JSON.parse(importJsonText) as Record<string, unknown>;
-      let entries: [string, Record<string, unknown>][] = [];
-      if (parsed && typeof parsed === "object" && parsed.mcpServers && typeof parsed.mcpServers === "object") {
-        entries = Object.entries(parsed.mcpServers as Record<string, Record<string, unknown>>);
-      } else if (parsed && typeof parsed === "object" && ("command" in parsed || "url" in parsed)) {
-        const n = importJsonName.trim() || "imported-mcp";
-        entries = [[n, parsed]];
-      }
-      if (!entries.length) {
-        toast.error(t("mcp.importJsonBad"));
-        return;
-      }
-      let ok = 0;
-      for (const [n, cfg] of entries) {
-        const s = newServer();
-        s.name = n;
-        s.enabled = true;
-        if (typeof cfg.command === "string") {
-          s.transport = "stdio";
-          s.command = cfg.command;
-          s.args = Array.isArray(cfg.args) ? (cfg.args as unknown[]).map(String) : [];
-          s.env =
-            cfg.env && typeof cfg.env === "object"
-              ? Object.fromEntries(Object.entries(cfg.env as Record<string, unknown>).map(([k, v]) => [k, String(v)]))
-              : {};
-        } else if (typeof cfg.url === "string") {
-          s.transport = typeof cfg.type === "string" ? cfg.type : "http";
-          s.url = cfg.url;
-          s.headers =
-            cfg.headers && typeof cfg.headers === "object"
-              ? Object.fromEntries(Object.entries(cfg.headers as Record<string, unknown>).map(([k, v]) => [k, String(v)]))
-              : {};
-        } else {
-          continue;
-        }
-        await saveMcp(s);
-        ok += 1;
-      }
-      toast.success(t("mcp.importJsonDone", { count: ok }));
-      setImportJsonText("");
-      setImportJsonName("");
+      parsed = parseMcpConfig(importJsonText, importJsonName.trim() || "imported-mcp");
     } catch (e) {
       toast.error(`${t("mcp.importJsonBad")}: ${String(e)}`);
+      return;
     }
+    if (!parsed.entries.length) {
+      toast.error(t("mcp.importJsonBad"));
+      return;
+    }
+    // 解析出但被跳过的条目要告知用户，不能静默丢弃
+    if (parsed.skipped.length) {
+      toast.warning(t("mcp.importSkipped", { n: parsed.skipped.length, names: parsed.skipped.join(", ") }));
+    }
+    let ok = 0;
+    for (const e of parsed.entries) {
+      const s = newServer();
+      s.name = e.name;
+      s.enabled = true;
+      s.transport = e.transport;
+      s.command = e.command;
+      s.args = e.args;
+      s.env = e.env;
+      s.url = e.url;
+      s.headers = e.headers;
+      await saveMcp(s);
+      ok += 1;
+    }
+    toast.success(t("mcp.importJsonDone", { count: ok }));
+    setImportJsonText("");
+    setImportJsonName("");
   };
 
   const singleJson = (s: McpServer) => JSON.stringify(exportServers([s]), null, 2);
@@ -486,11 +564,11 @@ export function McpPage() {
         <DialogContent wide>
           <DialogHeader>
             <DialogTitle>{editing?.id ? t("mcp.editTitle") : t("mcp.newTitle")}</DialogTitle>
-            {!editing?.id ? (
-              <div className="mt-2 flex items-center gap-0.5 rounded-lg border border-border bg-surface p-0.5 w-fit">
-                <button
-                  type="button"
-                  onClick={() => setNewMode("manual")}
+            {/* 表单 / JSON 两种编辑方式始终可用 —— 编辑已有服务时也应能直接改 JSON */}
+            <div className="mt-2 flex items-center gap-0.5 rounded-lg border border-border bg-surface p-0.5 w-fit">
+              <button
+                type="button"
+                onClick={() => setNewMode("manual")}
                   className={cn(
                     "rounded-md px-3 py-1 text-[11px] font-medium outline-none transition-colors",
                     newMode === "manual" ? "bg-primary-soft text-primary" : "text-ink-3 hover:text-foreground",
@@ -509,7 +587,6 @@ export function McpPage() {
                   {t("mcp.tabJson")}
                 </button>
               </div>
-            ) : null}
           </DialogHeader>
           <form
             onSubmit={(e) => {
@@ -519,18 +596,38 @@ export function McpPage() {
             className="flex min-h-0 flex-1 flex-col"
           >
             <DialogBody className="flex flex-col gap-4">
-              {newMode === "json" && !editing?.id ? (
+              {newMode === "json" ? (
                 <>
                   <p className="rounded-lg bg-bg-subtle px-3 py-2.5 text-xs leading-relaxed text-ink-2">
-                    {t("mcp.jsonExplain")}
+                    {editing?.id ? t("mcp.jsonExplainEdit") : t("mcp.jsonExplain")}
                   </p>
-                  <Field label={t("mcp.importJsonName")}>
-                    <Input value={importJsonName} onChange={(e) => setImportJsonName(e.target.value)} className="font-mono" />
-                  </Field>
-                  <div>
+                  {!editing?.id ? (
+                    <Field label={t("mcp.importJsonName")}>
+                      <Input value={importJsonName} onChange={(e) => setImportJsonName(e.target.value)} className="font-mono" />
+                    </Field>
+                  ) : null}
+                  <div className="flex flex-wrap gap-2">
                     <Button type="button" variant="secondary" className="h-8 gap-1.5 text-xs" onClick={() => void openMcpFile()}>
                       <FolderOpen className="size-3.5" />
                       {t("mcp.openFile")}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="h-8 gap-1.5 text-xs"
+                      onClick={() => void pasteFromClipboard()}
+                    >
+                      <ClipboardPaste className="size-3.5" />
+                      {t("mcp.pasteClipboard")}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-8 gap-1.5 text-xs"
+                      onClick={() => void formatJson()}
+                    >
+                      <Braces className="size-3.5" />
+                      {t("mcp.formatJson")}
                     </Button>
                   </div>
                   <Field label="JSON" className="flex min-h-0 flex-1 flex-col">
